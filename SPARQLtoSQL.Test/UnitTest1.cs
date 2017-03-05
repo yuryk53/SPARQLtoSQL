@@ -38,7 +38,32 @@ namespace SPARQLtoSQL.Test
                 foreach(var result in results)
                 {
                     Assert.IsTrue(result.Value("roleID").ToString() == "2");
+                    Console.WriteLine(result.ToString());
                 }
+            }
+        }
+
+        [TestMethod]
+        public void TestQueryBothKMS_LMS()
+        {
+            string queryStr = @"SELECT *
+                                    WHERE { ?usr <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
+                                            ?usr1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Assert.IsTrue(rset.Count == 7);
             }
         }
 
@@ -62,6 +87,112 @@ namespace SPARQLtoSQL.Test
             {
                 SparqlResultSet rset = (SparqlResultSet)results;
                 Assert.IsTrue(rset.Count == 1);
+            }
+        }
+
+        [TestMethod]
+        public void TestSubjPredURIs()
+        {
+            string queryStr = @"SELECT *
+								WHERE { <http://www.semanticweb.org/LMS/User/ID.1> <http://www.semanticweb.org/LMS/User#ROLE_ID> ?roleID}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Assert.IsTrue(rset.Count == 1);
+                foreach (var result in results)
+                {
+                    Assert.IsTrue(result.Value("roleID").ToString() == "1");
+                    Console.WriteLine(result.ToString());
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestSubjURI_ObjLiteral()
+        {
+            string queryStr = @"SELECT *
+								WHERE { <http://www.semanticweb.org/LMS/User/ID.1> ?predicate ""Alexander Cole""}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Console.WriteLine($"Count: {rset.Count}");
+                Assert.IsTrue(rset.Count == 1);
+                foreach (var result in results)
+                {
+                    Console.WriteLine(result.ToString());
+                    Assert.IsTrue(result.Value("predicate").ToString() == "http://www.semanticweb.org/LMS/User#NAME");
+                    
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestSubjURI_PredObjPatterns()
+        {
+            string queryStr = @"SELECT *
+								WHERE { <http://www.semanticweb.org/LMS/User/ID.1> ?predicate ?obj}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Console.WriteLine($"Count: {rset.Count}");
+                Assert.IsTrue(rset.Count == 5);
+
+                foreach (var result in results) //should output all attributes and their values
+                {
+                    Console.WriteLine(result.ToString());
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestSubjPredObjURIs_EXCEPTION()
+        {
+            //INCORRECT QUERY
+            string queryStr = @"SELECT *
+								WHERE { <http://www.semanticweb.org/LMS/User/ID.1> <http://www.semanticweb.org/LMS/User#ROLE> <http://www.semanticweb.org/LMS/Role/ID.1>}"; //INCORRECT QUERY!!!
+            TripleStore store = null;
+            SparqlQuery query = null;
+
+            //ACT
+            try {
+                Arrange(queryStr, out store, out query);
+            }catch (Exception ex)
+            {
+                //ASSERT
+                Assert.IsInstanceOfType(ex, typeof(ArgumentException));
             }
         }
 

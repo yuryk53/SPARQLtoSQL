@@ -94,9 +94,12 @@ namespace SPARQLtoSQL
 
                         if(triple.Subject.VariableName == null) //is not a pattern
                         {
+                            //if subj is not a literal, we should query DB for subj triples!!!
+                            //<http://www.semanticweb.org/LMS/User/ID.1> <http://www.semanticweb.org/LMS/User#NAME> ?name
 
+                            throw new NotImplementedException();
                         }
-                        if(triple.Predicate.VariableName == null) //is not a pattern
+                        if (triple.Predicate.VariableName == null) //is not a pattern
                         {
                             //query for equivalent properties
                             TripleStore store = new TripleStore();
@@ -107,29 +110,72 @@ namespace SPARQLtoSQL
                             queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
                             queryString.CommandText = @"SELECT ?property1 WHERE {
                                                         ?property owl:equivalentProperty ?property1
-                                                        filter regex(str(?property), '^"+triple.Predicate.ToString()+"')}";
+                                                        filter regex(str(?property), '^"+triple.Predicate.ToString().Trim('<','>')+"')}";
 
                             SparqlQueryParser parser = new SparqlQueryParser();
                             SparqlQuery query = parser.ParseFromString(queryString.ToString());
 
                             ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
                             var results = processor.ProcessQuery(query) as SparqlResultSet;
-
+                            Console.WriteLine();
+                            throw new NotImplementedException();
 
                         }
                         if(triple.Object.VariableName == null) //is not a pattern
                         {
-
+                            throw new NotImplementedException();
                         }
-
                         throw new NotImplementedException();
                     }
-                    else if(subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
+
+                    if(subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
                     {
                         //TODO
-                        throw new NotImplementedException();
+                        //if subj is not a literal, we should query DB for subj triples!!!
+                        //<http://www.semanticweb.org/LMS/User/ID.1> <http://www.semanticweb.org/LMS/User#NAME> ?name
+
+                        //<subject> <predicate> ?object
+                        /*
+                            SELECT User.NAME
+                            FROM table(subject)
+                            WHERE User.ID=1 AND User.NAME IS NOT NULL
+                        */
+
+                        //<subject> ?predicate ?object
+                        /*
+                            SELECT *
+                            FROM table(subject)
+                            WHERE User.ID=1
+                        */
+
+                        //<subject> ?predicate "Object"
+                        /*
+                            SELECT *
+                            FROM table(subject)
+                            WHERE User.ID=1
+                            //check for "Object" inside DataReader, when queried 
+                        */
+
+                        DBLoader dbLoader = new DBLoader(subjConnString);
+                        Dictionary<string, string> dbInfo = GetDatabaseInfoForIndividualURI(triple.Subject.ToString());
+                        
+                        List<RawTriple> rawTriples = dbLoader.GetTriplesForSubject(
+                            tableName: dbInfo["tableName"],
+                            individualColName: dbInfo["columnName"],
+                            individualColValue:dbInfo["columnValue"],
+                            prefixURI: dbInfo["prefix"],
+                            predicateColName: triple.Predicate.VariableName==null ? GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString())["columnName"] : null,
+                            obj: triple.Object.VariableName==null ? triple.Object.ToString().Trim('>', '<') : null
+                        );
+                        foreach (var rawTriple in rawTriples)
+                        {
+                            INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
+                            INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
+                            INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                            g.Assert(new Triple(subj, pred, obj));
+                        }
                     }
-                    else if(predConnString != null)
+                    if(predConnString != null)
                     {
                         //referring to DataType- or Object- Property
                         if(triple.Object.VariableName == null) //object is not a pattern
@@ -190,7 +236,7 @@ namespace SPARQLtoSQL
                         }
 
                     }
-                    else if(objConnString != null)
+                    if(objConnString != null)
                     {
                         //TODO
                         throw new NotImplementedException();
@@ -217,6 +263,7 @@ namespace SPARQLtoSQL
 
         static Dictionary<string,string> GetPrefixDbNameTableNameColNameFromURI(string uri)
         {
+            uri = uri.Trim('<', '>');
             Dictionary<string, string> result = new Dictionary<string, string>();
             Regex r = new Regex(@"(http\w{0,1}://.+/)(\w+)/(\w+)#(\w+)");
             if(r.IsMatch(uri))
@@ -229,6 +276,24 @@ namespace SPARQLtoSQL
                 return result;
             }
             throw new ArgumentException($"URI string {uri} is not a corrent URI!");
+        }
+
+        static Dictionary<string,string> GetDatabaseInfoForIndividualURI(string individualURI)
+        {
+            individualURI = individualURI.Trim('<', '>');
+            Dictionary<string, string> result = new Dictionary<string, string>();
+            Regex r = new Regex(@"(http\w{0,1}://.+/)(\w+)/(\w+)/(.+).(.+)");
+            if (r.IsMatch(individualURI))
+            {
+                Match match = r.Match(individualURI);
+                result["prefix"] = match.Groups[1].Value;
+                result["dbName"] = match.Groups[2].Value;
+                result["tableName"] = match.Groups[3].Value;
+                result["columnName"] = match.Groups[4].Value;
+                result["columnValue"] = match.Groups[5].Value;
+                return result;
+            }
+            throw new ArgumentException($"URI string {individualURI} is not a corrent individual URI!");
         }
 
         static void CustomQueryLMS_KMS()
@@ -259,15 +324,18 @@ namespace SPARQLtoSQL
             // queryString.CommandText = @"SELECT *
             //WHERE { ?usr <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
             //                                ?usr1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email}";
-            queryString.CommandText = @"SELECT *
-            WHERE { ?usr <http://www.semanticweb.org/LMS/User#ROLE_ID> ?roleID.
-                                            ?role <http://www.semanticweb.org/LMS/Role#ID> ?roleID.
-                                            ?role <http://www.semanticweb.org/LMS/Role#NAME> ""Teacher""}";
+            //queryString.CommandText = @"SELECT *
+            //WHERE { ?usr <http://www.semanticweb.org/LMS/User#ROLE_ID> ?roleID.
+            //                                ?role <http://www.semanticweb.org/LMS/Role#ID> ?roleID.
+            //                                ?role <http://www.semanticweb.org/LMS/Role#NAME> ""Teacher""}";
 
             //queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
             //queryString.CommandText = @"SELECT * WHERE {
             //                                            ?property owl:equivalentProperty ?property1
             //                                            filter regex(str(?property), '^http://www.semanticweb.org/FEDERATED/Kunde#NAME$')}";
+
+            queryString.CommandText = @"SELECT *
+								        WHERE { ?s <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ""John"" }";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());

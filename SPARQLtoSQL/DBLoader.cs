@@ -148,6 +148,109 @@ namespace SPARQLtoSQL
             return triples;
         }
 
+        public List<RawTriple> GetTriplesForSubject(string tableName, string individualColName, string individualColValue,
+                                                    string prefixURI, string predicateColName = null, string obj=null)
+        {
+            List<RawTriple> triples = new List<RawTriple>();
+            if (obj != null)
+            {
+                obj = obj.Trim('"');
+            }
+            using (SqlConnection conn = new SqlConnection(connString))
+            {
+                SqlCommand cmd = conn.CreateCommand();
+                bool subjObj = obj != null;
+                bool subjPred = predicateColName != null;
+                bool subjPredObj = subjObj && subjPred;
+
+                if(subjPredObj)
+                {
+                    throw new ArgumentException("Cannot query for <subject> <predicate> \"object\"!");
+                }
+                else if(subjObj)
+                {
+                    //<subject> ?predicate "Object"
+                    /*
+                        SELECT *
+                        FROM table(subject)
+                        WHERE User.ID=1
+                        //check for "Object" inside DataReader, when queried 
+                    */
+                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {individualColName} = {individualColValue}";
+                    conn.Open();
+                    SqlDataReader reader = cmd.ExecuteReader();
+                    string dbName = GetDBName();
+                    string pk = GetPrimaryKeys(dbName, tableName)[0];
+                    while (reader.Read())
+                    {
+                        for(int i=0; i<reader.FieldCount; i++)
+                        {
+                            if(reader[i].ToString()==obj)
+                            {
+                                RawTriple triple = new RawTriple
+                                {
+                                    Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
+                                    Pred = $"{prefixURI}{dbName}/{tableName}#{reader.GetName(i)}",
+                                    Obj = obj
+                                };
+                                triples.Add(triple);
+                            } 
+                        }
+                    }
+                }
+                else if(subjPred)
+                {
+                    //<subject> <predicate> ?object
+                    /*
+                        SELECT User.NAME
+                        FROM table(subject)
+                        WHERE User.ID=1 AND User.NAME IS NOT NULL
+                    */
+                    cmd.CommandText = $"SELECT {predicateColName} FROM [{tableName}] WHERE {individualColName} = {individualColValue} AND {predicateColName} IS NOT NULL";
+                    conn.Open();
+                    SqlDataReader reader = cmd.ExecuteReader();
+                    string dbName = GetDBName();
+                    while (reader.Read())
+                    {
+                        RawTriple triple = new RawTriple
+                        {
+                            Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
+                            Pred = $"{prefixURI}{dbName}/{tableName}#{predicateColName}",
+                            Obj = reader[predicateColName].ToString()
+                        };
+                        triples.Add(triple);      
+                    }
+                }
+                else if((subjObj || subjPred)== false) //only subject
+                {
+                    //<subject> ?predicate ?object
+                    /*
+                        SELECT *
+                        FROM table(subject)
+                        WHERE User.ID=1
+                    */
+                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {individualColName} = {individualColValue}";
+                    conn.Open();
+                    SqlDataReader reader = cmd.ExecuteReader();
+                    string dbName = GetDBName();
+                    while (reader.Read())
+                    {
+                        for(int i=0; i<reader.FieldCount; i++)
+                        {
+                            RawTriple triple = new RawTriple
+                            {
+                                Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
+                                Pred = $"{prefixURI}{dbName}/{tableName}#{reader.GetName(i)}",
+                                Obj = reader[i].ToString()
+                            };
+                            triples.Add(triple);
+                        }
+                    }
+                }
+            }
+            return triples;
+        }
+
         private List<string> GetPrimaryKeys(string dbName, string tableName)
         {
             SqlConnection sqlConnection = new SqlConnection(connString);

@@ -61,7 +61,9 @@ namespace SPARQLtoSQL
         static bool IsLiteralValue(string value)
         {
             value = value.TrimStart().TrimEnd();
-            return (value[0] == '"' && value[value.Length - 1] == '"');
+            bool hasQuotes = (value[0] == '"' && value[value.Length - 1] == '"');
+            bool hasAngleBracket = (value[0] == '<' && value[value.Length - 1] == '>');
+            return hasQuotes || !hasAngleBracket;
         }
 
         public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs)
@@ -94,10 +96,13 @@ namespace SPARQLtoSQL
 
                         if(triple.Subject.VariableName == null) //is not a pattern
                         {
-                            //if subj is not a literal, we should query DB for subj triples!!!
-                            //<http://www.semanticweb.org/LMS/User/ID.1> <http://www.semanticweb.org/LMS/User#NAME> ?name
+                            //IN FEDERATED schema there're no individuals, so we can't have subject URI or subject literal here!
 
-                            throw new NotImplementedException();
+                            //subject here could not be a URI! it would be logically incorrect!!!!!
+                            //it could only be a pattern
+
+                            throw new InvalidOperationException("Subject variable in tripple, referring to FEDERATED schema should be a PATTERN!");
+                            //throw new NotImplementedException();
                         }
                         if (triple.Predicate.VariableName == null) //is not a pattern
                         {
@@ -118,14 +123,67 @@ namespace SPARQLtoSQL
                             ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
                             var results = processor.ProcessQuery(query) as SparqlResultSet;
                             Console.WriteLine();
-                            throw new NotImplementedException();
+
+                            //object can be a literal or a pattern
+                            foreach (SparqlResult resultPredicate in results)
+                            {
+                                //query with new predicates and transform the results to FEDERATED schema syntax
+                                queryString = new SparqlParameterizedString();
+                                queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.ToString()} }} ";
+                                SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs);
+
+                                string federatedStem = triple.Predicate.ToString().Trim('<', '>').Split('#')[0]; //left part (before '#') -> /FEDERATED/table name
+                                //federatedStem += '/'; // /FEDERATED/table name/
+
+                                foreach (SparqlResult result in resultSet)
+                                {
+                                    Dictionary<string, string> dbInfo = GetDatabaseInfoForIndividualURI(result[0].ToString());
+                                    string subjStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                    string predStr = triple.Predicate.ToString().Trim('<', '>');
+                                    string objStr;
+                                    if (triple.Object.VariableName == null) //not a pattern
+                                    {
+                                        objStr = triple.Object.ToString().Trim('"');
+                                    }
+                                    else //object was a pattern ?object in sparql query
+                                    {
+                                        //dbInfo = GetDatabaseInfoForIndividualURI(result[1].ToString());
+                                        if(IsLiteralValue(result[1].ToString()))
+                                        {
+                                            objStr = result[1].ToString();
+                                        }
+                                        else
+                                        {
+                                            dbInfo = GetDatabaseInfoForIndividualURI(result[1].ToString());
+                                            objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                        } 
+                                    }
+                                    INode subj = g.CreateUriNode(new Uri(subjStr));
+                                    INode pred = g.CreateUriNode(new Uri(predStr));
+                                    INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
+                                    if (IsLiteralValue(objStr))
+                                    {
+                                        obj = g.CreateLiteralNode(objStr);
+                                    }
+                                    else obj = g.CreateUriNode(new Uri(objStr));
+                                    g.Assert(new Triple(subj, pred, obj));
+                                }
+                            }
+
+
+                            //throw new NotImplementedException();
 
                         }
                         if(triple.Object.VariableName == null) //is not a pattern
                         {
-                            throw new NotImplementedException();
+                            if(!IsLiteralValue(triple.Object.ToString()))
+                            {
+                                throw new InvalidOperationException("Object variable in tripple, referring to FEDERATED schema should be a PATTERN!");
+                                //throw new NotImplementedException();
+                            }
+                            
                         }
-                        throw new NotImplementedException();
+                        //throw new NotImplementedException();
                     }
 
                     if(subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
@@ -236,7 +294,7 @@ namespace SPARQLtoSQL
                         }
 
                     }
-                    if(objConnString != null)
+                    if(objConnString != null) //object is not a pattern
                     {
                         //TODO
                         throw new NotImplementedException();
@@ -261,6 +319,21 @@ namespace SPARQLtoSQL
             }
         }
 
+        static SparqlResultSet QuerySparqlFromDB(IGraph g, SparqlParameterizedString sparqlQuery, Dictionary<string,string> dbURIs)
+        {
+            TripleStore store = new TripleStore();
+            store.Add(g);
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            SparqlQuery query = parser.ParseFromString(sparqlQuery.ToString());
+
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs);
+
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+            return results;
+        }
+
         static Dictionary<string,string> GetPrefixDbNameTableNameColNameFromURI(string uri)
         {
             uri = uri.Trim('<', '>');
@@ -282,7 +355,7 @@ namespace SPARQLtoSQL
         {
             individualURI = individualURI.Trim('<', '>');
             Dictionary<string, string> result = new Dictionary<string, string>();
-            Regex r = new Regex(@"(http\w{0,1}://.+/)(\w+)/(\w+)/(.+).(.+)");
+            Regex r = new Regex(@"(http\w{0,1}://.+/)(\w+)/(\w+)/(\w+).(.+)");
             if (r.IsMatch(individualURI))
             {
                 Match match = r.Match(individualURI);
@@ -293,7 +366,7 @@ namespace SPARQLtoSQL
                 result["columnValue"] = match.Groups[5].Value;
                 return result;
             }
-            throw new ArgumentException($"URI string {individualURI} is not a corrent individual URI!");
+            throw new ArgumentException($"URI string {individualURI} is not a correct individual URI!");
         }
 
         static void CustomQueryLMS_KMS()
@@ -335,7 +408,8 @@ namespace SPARQLtoSQL
             //                                            filter regex(str(?property), '^http://www.semanticweb.org/FEDERATED/Kunde#NAME$')}";
 
             queryString.CommandText = @"SELECT *
-								        WHERE { ?s <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ""John"" }";
+								        WHERE { ?s <http://www.semanticweb.org/FEDERATED/Kunde#EMAIL> ?email.
+                                                ?s1 <http://www.semanticweb.org/LMS/User#EMAIL> ?email}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());

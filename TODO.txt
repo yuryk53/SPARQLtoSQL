@@ -1,0 +1,8 @@
+Phase 1:
+	Load ontology;
+	Execute reasoner.
+Phase 2:
+	Construct new T-mappings from the once, defined by user (compose the class and property hierarchies with the mappings) p.6
+	to derive additional mappings;
+Phase 3:
+	Optimize mappings (using disjunction (OR) optimization)

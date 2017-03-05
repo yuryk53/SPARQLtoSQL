@@ -1,0 +1,511 @@
+﻿using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+
+using System.IO;
+
+using System.Text.RegularExpressions;
+
+using VDS.RDF;
+using VDS.RDF.Writing;
+using VDS.RDF.Query;
+using VDS.RDF.Parsing;
+using VDS.RDF.Query.Inference;
+using VDS.RDF.Storage;
+using VDS.RDF.Query.Algebra;
+using VDS.RDF.Query.Patterns;
+
+namespace SPARQLtoSQL
+{
+    public class Program
+    {
+        static Mapping mapping = new Mapping();
+        static Dictionary<Node, string> nodesToSqlMap = new Dictionary<Node, string>();
+
+        static void Main(string[] args)
+        {
+            mapping.ReadMappings("mapping.tmap");
+
+
+            //ProjectNode p = new ProjectNode(null, new List<string>(new string[] { "x" }));
+            //JoinNode j = new JoinNode(parent: p);
+            //TerminalNode t1 = new TerminalNode(parent: j, subj: "?x", pred: "rdf:type", obj: ":Neoplasm");
+            //TerminalNode t2 = new TerminalNode(parent: j, subj: "?x", pred: ":hasStage", obj: ":stage-IIIa");
+            //SparqlGraph g = new SparqlGraph();
+            //g.Root = p;
+
+            //List<Node> sorted = g.TopologicalSort();
+            //PopulateNodesToSqlMap(g); //TODO: T-mappings derivation (from user once) should be run first!!!! (Phase 2)
+
+            //Console.WriteLine(mappings[":hasName"][0].IsMatch("?x", ":hasName", ":Neoplasm"));
+            
+            CustomQueryLMS_KMS();
+            //string connString = @"Data Source=ASUS\SQLEXPRESS;Initial Catalog=KMS;Integrated Security=True";
+        }
+
+        static string GetConnStringFromURI(Dictionary<string, string> dbURIs, string uri)
+        {
+            uri = uri.Trim('<', '>');
+            uri = uri.Replace(" ", "");
+
+            string dbURIsKey = dbURIs.Keys.FirstOrDefault(key => (key.Length <= uri.Length) ? key == uri.Substring(0, key.Length) : false);
+            if (dbURIsKey != null)
+            {
+                return dbURIs[dbURIsKey];
+            }
+            else return null;
+        }
+
+        static bool IsLiteralValue(string value)
+        {
+            value = value.TrimStart().TrimEnd();
+            return (value[0] == '"' && value[value.Length - 1] == '"');
+        }
+
+        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs)
+        {
+            if(algebra is IBgp)
+            {
+                IBgp bgp = algebra as IBgp;
+                //do work here
+                /*
+                    resolve DB name from subj/predicate/obj
+                    resolve Table name
+                    make query
+                    convert results to rdf triples
+                    add all the triples to IGraph g
+                */
+                var triples = bgp.TriplePatterns;
+
+                foreach(TriplePattern triple in triples)
+                {
+                    //do work here for each triple
+
+                    string subjConnString = GetConnStringFromURI(dbURIs, triple.Subject.ToString());
+                    string predConnString = GetConnStringFromURI(dbURIs, triple.Predicate.ToString());
+                    string objConnString = GetConnStringFromURI(dbURIs, triple.Object.ToString());
+
+                    if(subjConnString==null && predConnString==null && objConnString==null)
+                    {
+                        //we deal with request to FEDERATED schema or it's an error
+                        //if it's FEDERATED schema, we should find subclasses/subproperties, equivalent classes/properties and query for them
+
+                        if(triple.Subject.VariableName == null) //is not a pattern
+                        {
+
+                        }
+                        if(triple.Predicate.VariableName == null) //is not a pattern
+                        {
+                            //query for equivalent properties
+                            TripleStore store = new TripleStore();
+                            store.Add(g);
+
+                            SparqlParameterizedString queryString = new SparqlParameterizedString();
+
+                            queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+                            queryString.CommandText = @"SELECT ?property1 WHERE {
+                                                        ?property owl:equivalentProperty ?property1
+                                                        filter regex(str(?property), '^"+triple.Predicate.ToString()+"')}";
+
+                            SparqlQueryParser parser = new SparqlQueryParser();
+                            SparqlQuery query = parser.ParseFromString(queryString.ToString());
+
+                            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+                            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+
+                        }
+                        if(triple.Object.VariableName == null) //is not a pattern
+                        {
+
+                        }
+
+                        throw new NotImplementedException();
+                    }
+                    else if(subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
+                    {
+                        //TODO
+                        throw new NotImplementedException();
+                    }
+                    else if(predConnString != null)
+                    {
+                        //referring to DataType- or Object- Property
+                        if(triple.Object.VariableName == null) //object is not a pattern
+                        {
+                            if (IsLiteralValue(triple.Object.ToString()))
+                            {
+                                // ?s <predicate> "Object"
+
+                                /*
+                                    SELECT *
+                                    FROM table(predicate)
+                                    WHERE table.Attribute="Object"
+                                */
+                                DBLoader dbLoader = new DBLoader(predConnString);
+                                Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
+                                List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
+                                    tableName: dbInfo["tableName"],
+                                    columnName: dbInfo["columnName"],
+                                    prefixURI: dbInfo["prefix"],
+                                    obj: triple.Object.ToString());
+                                foreach (var rawTriple in rawTriples)
+                                {
+                                    INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
+                                    INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
+                                    INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                                    g.Assert(new Triple(subj, pred, obj));
+                                }
+                            }
+                            else if(objConnString!= null)
+                            {
+                                // ?s <predicate> <object>
+                                throw new NotImplementedException();
+                            }
+                        }
+                        else //object is a pattern
+                        {
+                            //?s <predicate> ?object
+
+                            /*
+                                SELECT *
+                                FROM table(predicate)
+                                WHERE table.Attribute="Object"
+                            */
+                            DBLoader dbLoader = new DBLoader(predConnString);
+                            Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
+                            List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
+                                tableName: dbInfo["tableName"],
+                                columnName: dbInfo["columnName"],
+                                prefixURI: dbInfo["prefix"],
+                                obj: null);
+                            foreach (var rawTriple in rawTriples)
+                            {
+                                INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
+                                INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
+                                INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                                g.Assert(new Triple(subj, pred, obj));
+                            }
+                        }
+
+                    }
+                    else if(objConnString != null)
+                    {
+                        //TODO
+                        throw new NotImplementedException();
+                    }
+
+                    //check if subj, pred and obj refer to one DB
+
+                }
+            }
+            else
+            {
+                if(algebra is IUnaryOperator)
+                {
+                    algebra = algebra as IUnaryOperator;
+                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs);
+                }
+                else if(algebra is IAbstractJoin)
+                {
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs);
+                }
+            }
+        }
+
+        static Dictionary<string,string> GetPrefixDbNameTableNameColNameFromURI(string uri)
+        {
+            Dictionary<string, string> result = new Dictionary<string, string>();
+            Regex r = new Regex(@"(http\w{0,1}://.+/)(\w+)/(\w+)#(\w+)");
+            if(r.IsMatch(uri))
+            {
+                Match match = r.Match(uri);
+                result["prefix"] = match.Groups[1].Value;
+                result["dbName"] = match.Groups[2].Value;
+                result["tableName"] = match.Groups[3].Value;
+                result["columnName"] = match.Groups[4].Value;
+                return result;
+            }
+            throw new ArgumentException($"URI string {uri} is not a corrent URI!");
+        }
+
+        static void CustomQueryLMS_KMS()
+        {
+            IGraph g = new VDS.RDF.Graph();                 //Load triples from file OWL
+            g.LoadFromFile("combined.owl");
+            g.BaseUri = null; //!
+
+            //INode subj = g.CreateUriNode(new Uri("http://www.semanticweb.org/KMS/User/1"));
+            //INode pred = g.CreateUriNode(new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type"));
+            //INode obj = g.CreateUriNode(new Uri("http://www.semanticweb.org/KMS/User"));
+            //g.Assert(new Triple(subj,pred,obj));
+            
+
+            RdfsReasoner reasoner = new RdfsReasoner(); //Apply reasoner
+            reasoner.Initialise(g);
+            reasoner.Apply(g);
+
+            
+
+            g.BaseUri = null;   //!!!!!!!!
+            TripleStore store = new TripleStore();
+            store.Add(g);
+
+            SparqlParameterizedString queryString = new SparqlParameterizedString();
+            //queryString.CommandText = @"SELECT * WHERE { ?user <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.semanticweb.org/KMS/User>.
+            //                                             OPTIONAL {?user <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.semanticweb.org/LMS/User>}}";
+            // queryString.CommandText = @"SELECT *
+            //WHERE { ?usr <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
+            //                                ?usr1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email}";
+            queryString.CommandText = @"SELECT *
+            WHERE { ?usr <http://www.semanticweb.org/LMS/User#ROLE_ID> ?roleID.
+                                            ?role <http://www.semanticweb.org/LMS/Role#ID> ?roleID.
+                                            ?role <http://www.semanticweb.org/LMS/Role#NAME> ""Teacher""}";
+
+            //queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+            //queryString.CommandText = @"SELECT * WHERE {
+            //                                            ?property owl:equivalentProperty ?property1
+            //                                            filter regex(str(?property), '^http://www.semanticweb.org/FEDERATED/Kunde#NAME$')}";
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            //SparqlQuery query = parser.ParseFromString(queryString.ToString());
+            SparqlQuery query = parser.ParseFromString(queryString.ToString());
+
+            Dictionary<string, string> dbURIs = new Dictionary<string, string>();
+            dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
+            dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs);
+
+            Console.WriteLine(query.ToAlgebra());
+            Console.WriteLine(query.ToString());
+
+            //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            //SparqlResultSet results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            ISparqlQueryProcessor processor = new QuantumQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                foreach (SparqlResult result in rset)
+                {
+                    Console.WriteLine(result);
+                }
+            }
+        }
+
+
+        static void CustomQuery()
+        {
+            Uri prefixRDF = new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#");
+            Uri prefixFilm = new Uri("http://www.semprog.com/film#");
+
+            //IGraph g = new Graph();                 //Load triples from file OWL
+            //g.LoadFromFile("film-ontology.owl");
+            //g.BaseUri = null; //!
+            IGraph g = new VDS.RDF.Graph();         //Load triples from server (OWL)
+
+            RdfsReasoner reasoner = new RdfsReasoner(); //Apply reasoner
+            reasoner.Initialise(g);
+            reasoner.Apply(g);
+
+
+            g.BaseUri = null;   //!!!!!!!!
+            TripleStore store = new TripleStore();
+            store.Add(g);
+
+            SparqlParameterizedString queryString = new SparqlParameterizedString();
+            queryString.Namespaces.AddNamespace("rdf", prefixRDF);
+            queryString.Namespaces.AddNamespace("film", prefixFilm);
+            queryString.CommandText = "SELECT ?who WHERE { ?who rdf:type film:Person }";
+
+            string sparql = "";
+
+            sparql = File.ReadAllText("sparql1.txt");
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            //SparqlQuery query = parser.ParseFromString(queryString.ToString());
+            SparqlQuery query = parser.ParseFromString(sparql);
+
+            Console.WriteLine(query.ToAlgebra());
+            Console.WriteLine(query.ToString());
+
+            //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            //SparqlResultSet results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            ISparqlQueryProcessor processor = new MirageQueryProcessor(mapping);//new LeviathanQueryProcessor(store);   //process query
+            string results = processor.ProcessQuery(query) as string;
+            Console.WriteLine(results);
+            //if (results is SparqlResultSet)
+            //{
+            //    SparqlResultSet rset = (SparqlResultSet)results;
+            //    foreach (SparqlResult result in rset)
+            //    {
+            //        Console.WriteLine(result);
+            //    }
+            //}
+        }
+
+        static void PopulateNodesToSqlMap(SparqlGraph g)
+        {
+            List<Node> terminalNodes = g.GetAllNodes(typeof(TerminalNode));
+
+            foreach(TerminalNode node in terminalNodes)
+            {
+                //try to match each node to sql expressions from mapping
+                string key = $"{node.Pred} {node.Obj}";
+                if (mapping.mappings.ContainsKey(key))
+                {
+                    string sql = mapping.mappings[key][0].SQL;
+                    nodesToSqlMap.Add(node, sql);
+                }
+                else
+                {
+                    key = $"{node.Pred}";
+                    if(mapping.mappings.ContainsKey(key))
+                    {
+                        string sql = mapping.mappings[key].Find(mapNode => mapNode.Object == node.Obj).SQL;
+                        nodesToSqlMap.Add(node, sql);
+                    }
+                    else //there is no mapping for this node
+                    {
+                        throw new Exception($"No mapping for node {node.Subj} {node.Pred} {node.Obj} was provided!");
+                    }
+                }
+            }
+        }
+
+        static string TranslateToSql(SparqlGraph g, Dictionary<string, List<MapNode>> map)
+        {
+            /*S = List of nodes in Q in a bottom-up topological order
+              sqlM = a map from nodes to SQL expressions*/
+            List<Node> S = g.TopologicalSort();
+            
+            foreach (Node n in S)
+            {
+                if(n is TerminalNode) //translating leaves
+                {
+                    //skip (this step was done in PopulateNodesToSqlMap)
+                    continue;
+                }
+                else
+                {
+                    if(n is JoinNode)
+                    {
+                        Node n1 = n.Children[0];
+                        Node n2 = n.Children[1];
+                        nodesToSqlMap[n] = InnerJoin(nodesToSqlMap[n1], nodesToSqlMap[n2]);   
+                    }
+                    else if(n is OptionalNode)
+                    {
+                        Node n1 = n.Children[0];
+                        Node n2 = n.Parent;
+                        string e = (n as OptionalNode).JoinCondition;
+                        nodesToSqlMap[n] = LeftJoin(nodesToSqlMap[n1], nodesToSqlMap[n2], e);
+                    }
+                    else if(n is UnionNode)
+                    {
+                        Node n1 = n.Children[0];
+                        Node n2 = n.Children[1];
+                        nodesToSqlMap[n] = Union(nodesToSqlMap[n1], nodesToSqlMap[n2]);
+                    }
+                    else if(n is FilterNode)
+                    {
+                        Node n1 = n.Children[0];
+                        string e = (n as FilterNode).FilterExpression;
+                        nodesToSqlMap[n] = Filter(nodesToSqlMap[n1], e);
+                    }
+                    else if(n is ProjectNode)
+                    {
+                        Node n1 = n.Children[0];
+                        List<string> pv = (n as ProjectNode).ProjectionVariables;
+                        nodesToSqlMap[n] = Project(nodesToSqlMap[n1], pv);
+                    }
+                }
+            }
+            return nodesToSqlMap[S.Last()];
+        }
+
+        static string InnerJoin(string q1, string q2)
+        {
+            throw new NotImplementedException();
+        }
+
+        static string LeftJoin(string q1, string q2, string e)
+        {
+            throw new NotImplementedException();
+        }
+
+        static string Union(string q1, string q2)
+        {
+            throw new NotImplementedException();
+        }
+
+        static string Filter(string q, string e)
+        {
+            throw new NotImplementedException();
+        }
+
+        static string Project(string q, List<string> pv)
+        {
+            throw new NotImplementedException();
+        }
+
+        //static void ReadMappings(string fName)
+        //{
+        //    using (StreamReader sr = new StreamReader(new FileStream(fName, FileMode.Open)))
+        //    {
+        //        while (!sr.EndOfStream)
+        //        {
+        //            //process node by node
+        //            string[] nodeLine = sr.ReadLine().Split();
+        //            //read SQL lines
+        //            string sql = "";
+        //            while (sr.Peek() == '\t')
+        //            {
+        //                sql += " " + sr.ReadLine().Remove(0,1);
+        //            }
+        //            sql = sql.Trim(new char[] { ' ', '.' });
+
+        //            MapNode node = new MapNode
+        //            {
+        //                DBString = nodeLine[0],
+        //                Predicate = nodeLine[1],
+        //                Object = nodeLine[2],
+        //                SQL = sql
+        //            };
+
+        //            Regex r = new Regex(@"\{.+\}");
+
+                    
+        //            string key = "";
+        //            if(r.IsMatch(nodeLine[1]))
+        //            {
+        //                key = nodeLine[2];
+        //            }
+        //            else if(r.IsMatch(nodeLine[2]))
+        //            {
+        //                key = nodeLine[1];
+        //            }
+        //            else
+        //                key = $"{nodeLine[1]} {nodeLine[2]}";
+
+        //            if (mappings.ContainsKey(key))
+        //            {
+        //                mappings[key].Add(node);
+        //            }
+        //            else
+        //            {
+        //                List<MapNode> list = new List<MapNode>();
+        //                list.Add(node);
+        //                mappings.Add(key, list);
+        //            }
+                        
+        //        }
+        //    }
+        //}
+    }
+}

@@ -94,7 +94,9 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="DBLoader.cs" />
+    <Compile Include="MSSQLdBLoader.cs" />
+    <Compile Include="DBLoaderFactory.cs" />
+    <Compile Include="IDBLoader.cs" />
     <Compile Include="Mapping.cs" />
     <Compile Include="MirageQueryProcessor.cs" />
     <Compile Include="Program.cs" />

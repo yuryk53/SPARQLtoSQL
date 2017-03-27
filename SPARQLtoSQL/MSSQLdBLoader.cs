@@ -20,11 +20,26 @@ namespace SPARQLtoSQL
         }
     }
 
-    public class DBLoader
+    public class MSSQLdBLoader : IDBLoader
     {
         string connString;
 
-        public DBLoader(string connString)
+        string IDBLoader.ConnectionString
+        {
+            get
+            {
+                return connString;
+            }
+
+            set
+            {
+                connString = value;
+            }
+        }
+
+        public MSSQLdBLoader() { }
+
+        public MSSQLdBLoader(string connString)
         {
             this.connString = connString;
         }
@@ -271,6 +286,11 @@ namespace SPARQLtoSQL
             }
 
             return pkList;
+        }
+
+        List<string> IDBLoader.GetPrimaryKeys(string dbName, string tableName)
+        {
+            throw new NotImplementedException();
         }
     }
 }

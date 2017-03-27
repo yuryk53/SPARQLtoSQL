@@ -13,6 +13,13 @@ namespace SPARQLtoSQL.Test
     [TestClass]
     public class SPARQLtoSQLTests
     {
+        public SPARQLtoSQLTests()
+        {
+            DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True",
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
+        }
+
         [TestMethod]
         public void TestSubjObjPatterns()
         {
@@ -44,6 +51,88 @@ namespace SPARQLtoSQL.Test
         }
 
         [TestMethod]
+        public void TestFEDERATED_SubjObjPattern_PredURI()
+        {
+            string queryStr = @"SELECT *
+								        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ?name }";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Assert.IsTrue(rset.Count == 20);
+                foreach (var result in results)
+                {
+                    Console.WriteLine(result.ToString());
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestFEDERATED_SubjPattern_PredURI_ObjLiteral()
+        {
+            string queryStr = @"SELECT *
+								WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ""Alexander Cole"" }";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Assert.IsTrue(rset.Count == 1);
+                foreach (var result in results)
+                {
+                    Console.WriteLine(result.ToString());
+                }
+            }
+        }
+
+        [TestMethod]
+        public void TestFEDERATED_SubjPattern_PredURI_ObjPattern_Filter()
+        {
+            string queryStr = @"SELECT *
+								        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ?name.
+                                                filter regex(str(?name), '^Alexander')}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Assert.IsTrue(rset.Count == 2);
+                foreach (var result in results)
+                {
+                    Console.WriteLine(result.ToString());
+                }
+            }
+        }
+
+        [TestMethod]
         public void TestQueryBothKMS_LMS()
         {
             string queryStr = @"SELECT *
@@ -63,6 +152,10 @@ namespace SPARQLtoSQL.Test
             if (results is SparqlResultSet)
             {
                 SparqlResultSet rset = (SparqlResultSet)results;
+                foreach (var result in results)
+                {
+                    Console.WriteLine(result.ToString());
+                }
                 Assert.IsTrue(rset.Count == 7);
             }
         }
@@ -196,6 +289,40 @@ namespace SPARQLtoSQL.Test
             }
         }
 
+        [TestMethod]
+        public void TestComplex_KMS_LMS_query()
+        {
+            //INCORRECT QUERY
+            string queryStr = @"SELECT ?user ?doc_name
+								        WHERE { ?user <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
+                                                ?user1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email.
+                                                ?user1 <http://www.semanticweb.org/KMS/User#ID> ?user1_id.
+                                                ?doc_id <http://www.semanticweb.org/KMS/Document#AUTHOR_ID> ?user1_id.
+                                                ?doc_id <http://www.semanticweb.org/KMS/Document#NAME> ?doc_name}";
+            TripleStore store = null;
+            SparqlQuery query = null;
+            Arrange(queryStr, out store, out query);
+
+            //ACT
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //ASSERT
+            Assert.IsInstanceOfType(results, typeof(SparqlResultSet));
+
+            if (results is SparqlResultSet)
+            {
+                SparqlResultSet rset = (SparqlResultSet)results;
+                Console.WriteLine($"Count: {rset.Count}");
+
+                foreach (var result in results) //should output all attributes and their values
+                {
+                    Console.WriteLine(result.ToString());
+                }
+            }
+
+        }
+
         public void Arrange(string sparqlQuery, out TripleStore store, out SparqlQuery query)
         {
             IGraph g = new VDS.RDF.Graph();                 //Load triples from file OWL
@@ -221,7 +348,7 @@ namespace SPARQLtoSQL.Test
             Dictionary<string, string> dbURIs = new Dictionary<string, string>();
             dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
             dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
-            Program.ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs);
+            Program.ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new SPARQLtoSQL.DBLoaderFactory());
 
             Console.WriteLine(query.ToAlgebra());
             Console.WriteLine(query.ToString());   

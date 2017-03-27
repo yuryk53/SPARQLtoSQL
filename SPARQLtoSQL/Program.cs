@@ -40,7 +40,10 @@ namespace SPARQLtoSQL
             //PopulateNodesToSqlMap(g); //TODO: T-mappings derivation (from user once) should be run first!!!! (Phase 2)
 
             //Console.WriteLine(mappings[":hasName"][0].IsMatch("?x", ":hasName", ":Neoplasm"));
-            
+
+            DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True",
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
             CustomQueryLMS_KMS();
             //string connString = @"Data Source=ASUS\SQLEXPRESS;Initial Catalog=KMS;Integrated Security=True";
         }
@@ -66,7 +69,7 @@ namespace SPARQLtoSQL
             return hasQuotes || !hasAngleBracket;
         }
 
-        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs)
+        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory)
         {
             if(algebra is IBgp)
             {
@@ -214,7 +217,7 @@ namespace SPARQLtoSQL
                             //check for "Object" inside DataReader, when queried 
                         */
 
-                        DBLoader dbLoader = new DBLoader(subjConnString);
+                        IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(subjConnString);
                         Dictionary<string, string> dbInfo = GetDatabaseInfoForIndividualURI(triple.Subject.ToString());
                         
                         List<RawTriple> rawTriples = dbLoader.GetTriplesForSubject(
@@ -247,7 +250,7 @@ namespace SPARQLtoSQL
                                     FROM table(predicate)
                                     WHERE table.Attribute="Object"
                                 */
-                                DBLoader dbLoader = new DBLoader(predConnString);
+                                IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
                                 Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
                                 List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
                                     tableName: dbInfo["tableName"],
@@ -262,9 +265,20 @@ namespace SPARQLtoSQL
                                     g.Assert(new Triple(subj, pred, obj));
                                 }
                             }
-                            else if(objConnString!= null)
+                            else if(objConnString!= null) //object is a URI
                             {
                                 // ?s <predicate> <object>
+                                /*
+                                    example:
+                                    ?s <http://www.semanticweb.org/LMS/User#Role> <http://www.semanticweb.org/LMS/Role/ID.1>
+                                    <predicate> here should be an object property
+
+                                    1. <predicate> -> Find in [LMS].User table the FK (attribute name) to [LMS].Role table -> ROLE_ID (FK)
+                                    2. 
+                                        SELECT *
+                                        FROM [LMS].User
+                                        WHERE User.ROLE_ID=1
+                                */
                                 throw new NotImplementedException();
                             }
                         }
@@ -277,7 +291,7 @@ namespace SPARQLtoSQL
                                 FROM table(predicate)
                                 WHERE table.Attribute="Object"
                             */
-                            DBLoader dbLoader = new DBLoader(predConnString);
+                            IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
                             Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
                             List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
                                 tableName: dbInfo["tableName"],
@@ -309,12 +323,12 @@ namespace SPARQLtoSQL
                 if(algebra is IUnaryOperator)
                 {
                     algebra = algebra as IUnaryOperator;
-                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs);
+                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs, dbLoaderFactory);
                 }
                 else if(algebra is IAbstractJoin)
                 {
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs);
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory);
                 }
             }
         }
@@ -327,7 +341,7 @@ namespace SPARQLtoSQL
             SparqlQueryParser parser = new SparqlQueryParser();
             SparqlQuery query = parser.ParseFromString(sparqlQuery.ToString());
 
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs);
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory());
 
             ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
             var results = processor.ProcessQuery(query) as SparqlResultSet;
@@ -407,9 +421,13 @@ namespace SPARQLtoSQL
             //                                            ?property owl:equivalentProperty ?property1
             //                                            filter regex(str(?property), '^http://www.semanticweb.org/FEDERATED/Kunde#NAME$')}";
 
-            queryString.CommandText = @"SELECT *
-								        WHERE { ?s <http://www.semanticweb.org/FEDERATED/Kunde#EMAIL> ?email.
-                                                ?s1 <http://www.semanticweb.org/LMS/User#EMAIL> ?email}";
+
+            queryString.CommandText = @"SELECT ?user ?doc_name
+								        WHERE { ?user <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
+                                                ?user1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email.
+                                                ?user1 <http://www.semanticweb.org/KMS/User#ID> ?user1_id.
+                                                ?doc_id <http://www.semanticweb.org/KMS/Document#AUTHOR_ID> ?user1_id.
+                                                ?doc_id <http://www.semanticweb.org/KMS/Document#NAME> ?doc_name}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());
@@ -418,9 +436,10 @@ namespace SPARQLtoSQL
             Dictionary<string, string> dbURIs = new Dictionary<string, string>();
             dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
             dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs);
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory());
 
             Console.WriteLine(query.ToAlgebra());
+            File.WriteAllText("results_log.txt", "\n" + query.ToAlgebra().ToString());
             Console.WriteLine(query.ToString());
 
             //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
@@ -429,12 +448,16 @@ namespace SPARQLtoSQL
             ISparqlQueryProcessor processor = new QuantumQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
             var results = processor.ProcessQuery(query) as SparqlResultSet;
 
+
+            
             if (results is SparqlResultSet)
             {
                 SparqlResultSet rset = (SparqlResultSet)results;
+                
                 foreach (SparqlResult result in rset)
                 {
-                    Console.WriteLine(result);
+                    Console.WriteLine(result.ToString());
+                    File.AppendAllText("results_log.txt", "\n" + result.ToString());
                 }
             }
         }

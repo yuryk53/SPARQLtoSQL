@@ -69,10 +69,12 @@ namespace SPARQLtoSQL
             return hasQuotes || !hasAngleBracket;
         }
 
-        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory)
+        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory, List<Triple> triplesToAdd, Dictionary<string, List<string>> matchIFPDict)
         {
             if(algebra is IBgp)
             {
+                HashSet<string> IFPs = GetIFPsFromOntology(g);
+
                 IBgp bgp = algebra as IBgp;
                 //do work here
                 /*
@@ -105,13 +107,17 @@ namespace SPARQLtoSQL
                             //it could only be a pattern
 
                             throw new InvalidOperationException("Subject variable in tripple, referring to FEDERATED schema should be a PATTERN!");
-                            //throw new NotImplementedException();
                         }
                         if (triple.Predicate.VariableName == null) //is not a pattern
                         {
                             //query for equivalent properties
                             TripleStore store = new TripleStore();
                             store.Add(g);
+                        
+
+                            //---------------------------------------------------------------------------------
+                            //--------------------------PROCESS owl:equivalentProperty-------------------------
+                            //also rdfs:subPropertyOf and rdfs:subClassOf should be processed separately
 
                             SparqlParameterizedString queryString = new SparqlParameterizedString();
 
@@ -161,6 +167,30 @@ namespace SPARQLtoSQL
                                             objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
                                         } 
                                     }
+
+
+                                    //USE ANOTHER MATCHING TECHNIQUES HERE (i.e. lexicographical matching)
+                                    
+                                    //вместо IFPs.Contains(predStr) можно сделать функцию лексикографического расстояния
+                                    //тоесть, если LexDistance(IFPs, predStr) <= someThreshold, считать записи одинаковыми
+                                    //только, вместо IFPs должна быть другая таблица с названиями аттрбутов (predicates)
+                                    //которые мы хотим сопоставить, а  вместо matchIFPDict должна быть таблица с парами
+                                    //[значение аттрибута, который мы хотим сопоставить] <-> значение subject'a
+                                    //возможно, стоит придумать свой онтологический аттрибут, чтобы помечать поля, которые
+                                    //мы сопоставляем?
+
+
+                                    if(IFPs.Contains(predStr))
+                                    {
+                                        if (matchIFPDict.ContainsKey(objStr))
+                                        {
+                                            matchIFPDict[objStr].Add(subjStr);
+                                        }
+                                        else matchIFPDict.Add(objStr, new List<string>(new string[] { subjStr }));
+                                    }
+
+                                    //here we obtain triples from underling DBs - KMS+LMS
+                                    //these triples should be matched here ON Inverse Functional Properties
                                     INode subj = g.CreateUriNode(new Uri(subjStr));
                                     INode pred = g.CreateUriNode(new Uri(predStr));
                                     INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
@@ -169,7 +199,12 @@ namespace SPARQLtoSQL
                                         obj = g.CreateLiteralNode(objStr);
                                     }
                                     else obj = g.CreateUriNode(new Uri(objStr));
-                                    g.Assert(new Triple(subj, pred, obj));
+                                    triplesToAdd.Add(new Triple(subj, pred, obj));
+                                    if(triplesToAdd==null && matchIFPDict==null)
+                                    {
+                                        g.Assert(new Triple(subj, pred, obj));
+                                    }
+                                    //g.Assert(new Triple(subj, pred, obj));
                                 }
                             }
 
@@ -181,7 +216,9 @@ namespace SPARQLtoSQL
                         {
                             if(!IsLiteralValue(triple.Object.ToString()))
                             {
-                                throw new InvalidOperationException("Object variable in tripple, referring to FEDERATED schema should be a PATTERN!");
+                                //SKIP IT
+                                ;
+                                //throw new InvalidOperationException("Object variable in tripple, referring to FEDERATED schema should be a PATTERN!");
                                 //throw new NotImplementedException();
                             }
                             
@@ -323,14 +360,41 @@ namespace SPARQLtoSQL
                 if(algebra is IUnaryOperator)
                 {
                     algebra = algebra as IUnaryOperator;
-                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs, dbLoaderFactory);
+                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
                 }
                 else if(algebra is IAbstractJoin)
                 {
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory);
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
                 }
             }
+        }
+
+        static HashSet<string> GetIFPsFromOntology(IGraph g)
+        {
+            TripleStore store = new TripleStore();
+            store.Add(g);
+
+            //get list of Inverse Functional Properties from ontology
+            SparqlParameterizedString queryString = new SparqlParameterizedString();
+
+            queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+            queryString.Namespaces.AddNamespace("rdf", new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#"));
+            queryString.CommandText = @"SELECT ?property WHERE {
+                                               ?property <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <owl:InverseFunctionalProperty>. }";
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            SparqlQuery query = parser.ParseFromString(queryString.ToString());
+
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            HashSet<string> IFPs = new HashSet<string>();
+            foreach(SparqlResult result in results)
+            {
+                IFPs.Add(result[0].ToString());
+            }
+            return IFPs;
         }
 
         static SparqlResultSet QuerySparqlFromDB(IGraph g, SparqlParameterizedString sparqlQuery, Dictionary<string,string> dbURIs)
@@ -341,7 +405,7 @@ namespace SPARQLtoSQL
             SparqlQueryParser parser = new SparqlQueryParser();
             SparqlQuery query = parser.ParseFromString(sparqlQuery.ToString());
 
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory());
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), null, null);
 
             ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
             var results = processor.ProcessQuery(query) as SparqlResultSet;
@@ -422,12 +486,20 @@ namespace SPARQLtoSQL
             //                                            filter regex(str(?property), '^http://www.semanticweb.org/FEDERATED/Kunde#NAME$')}";
 
 
-            queryString.CommandText = @"SELECT ?user ?doc_name
-								        WHERE { ?user <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
-                                                ?user1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email.
-                                                ?user1 <http://www.semanticweb.org/KMS/User#ID> ?user1_id.
-                                                ?doc_id <http://www.semanticweb.org/KMS/Document#AUTHOR_ID> ?user1_id.
-                                                ?doc_id <http://www.semanticweb.org/KMS/Document#NAME> ?doc_name}";
+            //queryString.CommandText = @"SELECT ?user ?doc_name
+            //    WHERE { ?user <http://www.semanticweb.org/LMS/User#EMAIL> ?email.
+            //                                    ?user1 <http://www.semanticweb.org/KMS/User#EMAIL> ?email.
+            //                                    ?user1 <http://www.semanticweb.org/KMS/User#ID> ?user1_id.
+            //                                    ?doc_id <http://www.semanticweb.org/KMS/Document#AUTHOR_ID> ?user1_id.
+            //                                    ?doc_id <http://www.semanticweb.org/KMS/Document#NAME> ?doc_name}";
+
+
+            //queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> 
+            //                            SELECT ?u ?p ?o WHERE {?u rdfs:subClassOf <http://www.semanticweb.org/FEDERATED/Kunde>.
+            //                                             ?u <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ?o}";
+
+            queryString.CommandText = @"SELECT *
+                                        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/Kunde#EMAIL> ?email }";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());
@@ -436,7 +508,16 @@ namespace SPARQLtoSQL
             Dictionary<string, string> dbURIs = new Dictionary<string, string>();
             dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
             dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory());
+
+
+            List<Triple> triplesToAdd = new List<Triple>();
+            Dictionary<string, List<string>> matchIFPDict = new Dictionary<string, List<string>>();
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), triplesToAdd, matchIFPDict);
+            reasoner.Initialise(g);
+            reasoner.Apply(g);
+
+            MatchRecordsIFPAndStore(g, triplesToAdd, matchIFPDict);
+
 
             Console.WriteLine(query.ToAlgebra());
             File.WriteAllText("results_log.txt", "\n" + query.ToAlgebra().ToString());
@@ -462,6 +543,49 @@ namespace SPARQLtoSQL
             }
         }
 
+        private static void MatchRecordsIFPAndStore(IGraph g, List<Triple> triplesToAdd, Dictionary<string, List<string>> matchIFPDict)
+        {
+            //compose unified IDs
+            Dictionary<string, string> unifiedIDs = new Dictionary<string, string>();
+
+            foreach(var key in matchIFPDict.Keys)
+            {
+                Regex r = new Regex(@"(.+)/(.+)$");
+                string federated_stem = r.Match(matchIFPDict[key][0]).Groups[1].Value;
+                if (federated_stem.Length == 0)
+                    throw new Exception("Federated stem derivation error!");
+
+                string federated_uri = federated_stem+"/";
+                foreach (var subj in matchIFPDict[key])
+                {
+                    federated_uri += r.Match(subj).Groups[2].Value + ".";
+                }
+                federated_uri = federated_uri.Remove(federated_uri.Length - 1, 1);
+                
+                foreach(var subj in matchIFPDict[key])
+                {
+                    unifiedIDs.Add(subj, federated_uri);
+                }
+            }
+
+
+            foreach(Triple t in triplesToAdd)
+            {
+                string subjStr = t.Subject.ToString(); //probably, unique ID
+                subjStr = unifiedIDs[subjStr];
+                string objStr = unifiedIDs.ContainsKey(t.Object.ToString()) ? unifiedIDs[t.Object.ToString()] : t.Object.ToString();
+
+
+                INode subj = g.CreateUriNode(new Uri(subjStr));
+                INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
+                if (IsLiteralValue(objStr))
+                {
+                    obj = g.CreateLiteralNode(objStr);
+                }
+                else obj = g.CreateUriNode(new Uri(objStr));
+                g.Assert(subj, t.Predicate, obj);
+            }
+        }
 
         static void CustomQuery()
         {

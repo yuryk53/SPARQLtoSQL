@@ -348,7 +348,13 @@ namespace SPARQLtoSQL.Test
             Dictionary<string, string> dbURIs = new Dictionary<string, string>();
             dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
             dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
-            Program.ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new SPARQLtoSQL.DBLoaderFactory());
+            //Program.ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new SPARQLtoSQL.DBLoaderFactory(), new List<Triple>(), new Dictionary<string, List<string>>());
+
+            List<Triple> triplesToAdd = new List<Triple>();
+            Program.ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), triplesToAdd);
+            //reasoner.Initialise(g);
+            //reasoner.Apply(g);
+            Program.MatchRecordsIFPAndStore(g, triplesToAdd);
 
             Console.WriteLine(query.ToAlgebra());
             Console.WriteLine(query.ToString());   

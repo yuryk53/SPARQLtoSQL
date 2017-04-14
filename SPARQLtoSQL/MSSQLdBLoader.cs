@@ -123,7 +123,7 @@ namespace SPARQLtoSQL
             return triples;
         }
 
-        public List<RawTriple> GetTriplesForPredicateObject(string tableName, string columnName, string prefixURI, string obj)
+        public List<RawTriple> GetTriplesForPredicateObject(string tableName, string columnName, string prefixURI, string obj, List<string> IFPs=null)
         {
             List<RawTriple> triples = new List<RawTriple>();
             if(obj!= null)
@@ -149,13 +149,32 @@ namespace SPARQLtoSQL
                 string pk = GetPrimaryKeys(dbName, tableName)[0];
                 while (reader.Read())
                 {
+                    counter++;
                     RawTriple triple = new RawTriple
                     {
-                        Subj = $"{prefixURI}{dbName}/{tableName}/{pk}.{(reader[pk] ?? ++counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                        Subj = $"{prefixURI}{dbName}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
                         Pred = $"{prefixURI}{dbName}/{tableName}#{columnName}",
                         Obj = obj ?? reader[columnName].ToString()
                     };
                     triples.Add(triple);
+
+                    if(IFPs!= null)
+                    {
+                        foreach(string columnURI in IFPs)
+                        {
+                            if (columnURI.Contains($"{prefixURI}{dbName}/{tableName}"))   //IFP columnURI should correspond to current entity, not the FEDERATED one, for example
+                            {
+                                string ifpColumnName = columnURI.Replace($"{prefixURI}{dbName}/{tableName}#", "");
+                                RawTriple tripleIFP = new RawTriple
+                                {
+                                    Subj = $"{prefixURI}{dbName}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                                    Pred = columnURI,
+                                    Obj = obj ?? reader[ifpColumnName].ToString()
+                                };
+                                triples.Add(tripleIFP);
+                            }
+                        }
+                    }
 
                     //triples.Add(new RawTriple { Subj = tableName + (reader["ID"] ?? ++counter), Pred = "Table", Obj = tableName });
                 }
@@ -210,6 +229,8 @@ namespace SPARQLtoSQL
                                 };
                                 triples.Add(triple);
                             } 
+
+
                         }
                     }
                 }

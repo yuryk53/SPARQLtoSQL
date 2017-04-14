@@ -23,6 +23,7 @@ namespace SPARQLtoSQL
     {
         static Mapping mapping = new Mapping();
         static Dictionary<Node, string> nodesToSqlMap = new Dictionary<Node, string>();
+        static Dictionary<string, string> dbURIs = null;
 
         static void Main(string[] args)
         {
@@ -40,6 +41,10 @@ namespace SPARQLtoSQL
             //PopulateNodesToSqlMap(g); //TODO: T-mappings derivation (from user once) should be run first!!!! (Phase 2)
 
             //Console.WriteLine(mappings[":hasName"][0].IsMatch("?x", ":hasName", ":Neoplasm"));
+
+            dbURIs = new Dictionary<string, string>();
+            dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
+            dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
 
             DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
                 @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True",
@@ -69,7 +74,7 @@ namespace SPARQLtoSQL
             return hasQuotes || !hasAngleBracket;
         }
 
-        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory, List<Triple> triplesToAdd, Dictionary<string, List<string>> matchIFPDict)
+        public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory, List<Triple> triplesToAdd)
         {
             if(algebra is IBgp)
             {
@@ -119,27 +124,28 @@ namespace SPARQLtoSQL
                             //--------------------------PROCESS owl:equivalentProperty-------------------------
                             //also rdfs:subPropertyOf and rdfs:subClassOf should be processed separately
 
-                            SparqlParameterizedString queryString = new SparqlParameterizedString();
+                            //SparqlParameterizedString queryString = new SparqlParameterizedString();
 
-                            queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
-                            queryString.CommandText = @"SELECT ?property1 WHERE {
-                                                        ?property owl:equivalentProperty ?property1
-                                                        filter regex(str(?property), '^"+triple.Predicate.ToString().Trim('<','>')+"')}";
+                            //queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+                            //queryString.CommandText = @"SELECT ?property1 WHERE {
+                            //                            ?property owl:equivalentProperty ?property1
+                            //                            filter regex(str(?property), '^"+triple.Predicate.ToString().Trim('<','>')+"')}";
 
-                            SparqlQueryParser parser = new SparqlQueryParser();
-                            SparqlQuery query = parser.ParseFromString(queryString.ToString());
+                            //SparqlQueryParser parser = new SparqlQueryParser();
+                            //SparqlQuery query = parser.ParseFromString(queryString.ToString());
 
-                            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
-                            var results = processor.ProcessQuery(query) as SparqlResultSet;
+                            //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+                            //var results = processor.ProcessQuery(query) as SparqlResultSet;
+                            var results = GetEquivalentProperties(triple.Predicate.ToString(), store);
                             Console.WriteLine();
 
                             //object can be a literal or a pattern
                             foreach (SparqlResult resultPredicate in results)
                             {
                                 //query with new predicates and transform the results to FEDERATED schema syntax
-                                queryString = new SparqlParameterizedString();
+                                SparqlParameterizedString queryString = new SparqlParameterizedString();
                                 queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.ToString()} }} ";
-                                SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs);
+                                SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
 
                                 string federatedStem = triple.Predicate.ToString().Trim('<', '>').Split('#')[0]; //left part (before '#') -> /FEDERATED/table name
                                 //federatedStem += '/'; // /FEDERATED/table name/
@@ -179,15 +185,18 @@ namespace SPARQLtoSQL
                                     //возможно, стоит придумать свой онтологический аттрибут, чтобы помечать поля, которые
                                     //мы сопоставляем?
 
+                                    //а помечать такие (похожие) поля может программа, которая составляет онтологию с помощью
+                                    //общедоступных онтологий (сопосталяемые классы должны обязательно наследоветь FEDERATED класс)
 
-                                    if(IFPs.Contains(predStr))
-                                    {
-                                        if (matchIFPDict.ContainsKey(objStr))
-                                        {
-                                            matchIFPDict[objStr].Add(subjStr);
-                                        }
-                                        else matchIFPDict.Add(objStr, new List<string>(new string[] { subjStr }));
-                                    }
+                                    //добавить сущности в кластер по IFP
+                                    //if(IFPs.Contains(predStr))
+                                    //{
+                                    //    if (matchIFPDict.ContainsKey(objStr))
+                                    //    {
+                                    //        matchIFPDict[objStr].Add(subjStr);
+                                    //    }
+                                    //    else matchIFPDict.Add(objStr, new List<string>(new string[] { subjStr }));
+                                    //}
 
                                     //here we obtain triples from underling DBs - KMS+LMS
                                     //these triples should be matched here ON Inverse Functional Properties
@@ -200,10 +209,11 @@ namespace SPARQLtoSQL
                                     }
                                     else obj = g.CreateUriNode(new Uri(objStr));
                                     triplesToAdd.Add(new Triple(subj, pred, obj));
-                                    if(triplesToAdd==null && matchIFPDict==null)
-                                    {
-                                        g.Assert(new Triple(subj, pred, obj));
-                                    }
+                                    //if(triplesToAdd==null && matchIFPDict==null)
+                                    //{
+                                    //    g.Assert(new Triple(subj, pred, obj));
+                                    //   // triplesToAdd.Add(new Triple(subj, pred, obj));
+                                    //}
                                     //g.Assert(new Triple(subj, pred, obj));
                                 }
                             }
@@ -270,7 +280,8 @@ namespace SPARQLtoSQL
                             INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                             INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
                             INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
-                            g.Assert(new Triple(subj, pred, obj));
+                            triplesToAdd.Add(new Triple(subj, pred, obj));
+                            //g.Assert(new Triple(subj, pred, obj));
                         }
                     }
                     if(predConnString != null)
@@ -289,17 +300,31 @@ namespace SPARQLtoSQL
                                 */
                                 IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
                                 Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
+                                
                                 List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
                                     tableName: dbInfo["tableName"],
                                     columnName: dbInfo["columnName"],
                                     prefixURI: dbInfo["prefix"],
-                                    obj: triple.Object.ToString());
+                                    obj: triple.Object.ToString(),
+                                    IFPs: GetIFPsFromOntology(g).ToList());
+
                                 foreach (var rawTriple in rawTriples)
                                 {
                                     INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                                     INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
                                     INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
-                                    g.Assert(new Triple(subj, pred, obj));
+
+                                    //добавить сущности в кластер по IFP
+                                    //if (IFPs.Contains(rawTriple.Pred))
+                                    //{
+                                    //    if (matchIFPDict.ContainsKey(rawTriple.Obj))
+                                    //    {
+                                    //        matchIFPDict[rawTriple.Obj].Add(rawTriple.Subj);
+                                    //    }
+                                    //    else matchIFPDict.Add(rawTriple.Obj, new List<string>(new string[] { rawTriple.Subj }));
+                                    //}
+                                    triplesToAdd.Add(new Triple(subj, pred, obj));
+                                    //g.Assert(new Triple(subj, pred, obj));
                                 }
                             }
                             else if(objConnString!= null) //object is a URI
@@ -334,13 +359,26 @@ namespace SPARQLtoSQL
                                 tableName: dbInfo["tableName"],
                                 columnName: dbInfo["columnName"],
                                 prefixURI: dbInfo["prefix"],
-                                obj: null);
+                                obj: null,
+                                IFPs: GetIFPsFromOntology(g).ToList());
+
                             foreach (var rawTriple in rawTriples)
                             {
                                 INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                                 INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
                                 INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
-                                g.Assert(new Triple(subj, pred, obj));
+
+                                //добавить сущности в кластер по IFP
+                                //if (IFPs.Contains(rawTriple.Pred))
+                                //{
+                                //    if (matchIFPDict.ContainsKey(rawTriple.Obj))
+                                //    {
+                                //        matchIFPDict[rawTriple.Obj].Add(rawTriple.Subj);
+                                //    }
+                                //    else matchIFPDict.Add(rawTriple.Obj, new List<string>(new string[] { rawTriple.Subj }));
+                                //}
+                                triplesToAdd.Add(new Triple(subj, pred, obj));
+                                //g.Assert(new Triple(subj, pred, obj));
                             }
                         }
 
@@ -360,14 +398,31 @@ namespace SPARQLtoSQL
                 if(algebra is IUnaryOperator)
                 {
                     algebra = algebra as IUnaryOperator;
-                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
+                    ResolveBGPsFromDB((algebra as IUnaryOperator).InnerAlgebra, g, dbURIs, dbLoaderFactory, triplesToAdd);
                 }
                 else if(algebra is IAbstractJoin)
                 {
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
-                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory, triplesToAdd, matchIFPDict);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory, triplesToAdd);
+                    ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory, triplesToAdd);
                 }
             }
+        }
+
+        private static SparqlResultSet GetEquivalentProperties(string property, TripleStore store)
+        {
+            SparqlParameterizedString queryString = new SparqlParameterizedString();
+
+            queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+            queryString.CommandText = @"SELECT ?property1 WHERE {
+                                                        ?property owl:equivalentProperty ?property1
+                                                        filter regex(str(?property), '^" + property.Trim('<', '>') + "')}";
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            SparqlQuery query = parser.ParseFromString(queryString.ToString());
+
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            var results = processor.ProcessQuery(query) as SparqlResultSet;
+            return results;
         }
 
         static HashSet<string> GetIFPsFromOntology(IGraph g)
@@ -397,15 +452,20 @@ namespace SPARQLtoSQL
             return IFPs;
         }
 
-        static SparqlResultSet QuerySparqlFromDB(IGraph g, SparqlParameterizedString sparqlQuery, Dictionary<string,string> dbURIs)
+        static SparqlResultSet QuerySparqlFromDB(IGraph g1, SparqlParameterizedString sparqlQuery, Dictionary<string,string> dbURIs, List<Triple> triplesToAdd)
         {
+            IGraph g = new VDS.RDF.Graph(g1.Triples);
             TripleStore store = new TripleStore();
             store.Add(g);
 
             SparqlQueryParser parser = new SparqlQueryParser();
             SparqlQuery query = parser.ParseFromString(sparqlQuery.ToString());
 
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), null, null);
+            //List<Triple> triplesToAdd = new List<Triple>();
+            //Dictionary<string, List<string>> matchIFPsDict = new Dictionary<string, List<string>>();
+
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), triplesToAdd);
+            MatchRecordsIFPAndStore(g, triplesToAdd);
 
             ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
             var results = processor.ProcessQuery(query) as SparqlResultSet;
@@ -499,24 +559,26 @@ namespace SPARQLtoSQL
             //                                             ?u <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ?o}";
 
             queryString.CommandText = @"SELECT *
-                                        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/Kunde#EMAIL> ?email }";
+                                        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/User#NAME> ?name.
+                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#EMAIL> ?email.
+                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#LMS.ID> ?lmdID.
+                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#KMS.ID> ?kmsID.}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());
             SparqlQuery query = parser.ParseFromString(queryString.ToString());
 
-            Dictionary<string, string> dbURIs = new Dictionary<string, string>();
-            dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
-            dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
-
-
             List<Triple> triplesToAdd = new List<Triple>();
-            Dictionary<string, List<string>> matchIFPDict = new Dictionary<string, List<string>>();
-            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), triplesToAdd, matchIFPDict);
-            reasoner.Initialise(g);
-            reasoner.Apply(g);
+            ResolveBGPsFromDB(query.ToAlgebra(), g, dbURIs, new DBLoaderFactory(), triplesToAdd);
+            //triplesToAdd = triplesToAdd.Distinct().ToList();
+            //reasoner.Initialise(g);
+            //reasoner.Apply(g);
 
-            MatchRecordsIFPAndStore(g, triplesToAdd, matchIFPDict);
+
+            ResolveAmbiguitiesInTriples(triplesToAdd, new GenericRecordsAmbiguityResolver());
+            MatchRecordsIFPAndStore(g, triplesToAdd);
+
+
 
 
             Console.WriteLine(query.ToAlgebra());
@@ -543,48 +605,189 @@ namespace SPARQLtoSQL
             }
         }
 
-        private static void MatchRecordsIFPAndStore(IGraph g, List<Triple> triplesToAdd, Dictionary<string, List<string>> matchIFPDict)
+        /// <summary>
+        /// Triples are ambiguos if they contain for the same subject and predicate different objects
+        /// </summary>
+        /// <param name="triplesToAdd">Triples which will be added to target triple store</param>
+        /// <param name="resolver">The same records resolver</param>
+        private static void ResolveAmbiguitiesInTriples(List<Triple> triplesToAdd, IRecordsAmbiguityResolver resolver)
         {
-            //compose unified IDs
-            Dictionary<string, string> unifiedIDs = new Dictionary<string, string>();
-
-            foreach(var key in matchIFPDict.Keys)
-            {
-                Regex r = new Regex(@"(.+)/(.+)$");
-                string federated_stem = r.Match(matchIFPDict[key][0]).Groups[1].Value;
-                if (federated_stem.Length == 0)
-                    throw new Exception("Federated stem derivation error!");
-
-                string federated_uri = federated_stem+"/";
-                foreach (var subj in matchIFPDict[key])
-                {
-                    federated_uri += r.Match(subj).Groups[2].Value + ".";
-                }
-                federated_uri = federated_uri.Remove(federated_uri.Length - 1, 1);
-                
-                foreach(var subj in matchIFPDict[key])
-                {
-                    unifiedIDs.Add(subj, federated_uri);
-                }
-            }
-
+            Dictionary<string, List<string>> subjPred_ObjectListDict = new Dictionary<string, List<string>>();
 
             foreach(Triple t in triplesToAdd)
             {
-                string subjStr = t.Subject.ToString(); //probably, unique ID
-                subjStr = unifiedIDs[subjStr];
-                string objStr = unifiedIDs.ContainsKey(t.Object.ToString()) ? unifiedIDs[t.Object.ToString()] : t.Object.ToString();
-
-
-                INode subj = g.CreateUriNode(new Uri(subjStr));
-                INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
-                if (IsLiteralValue(objStr))
+                string key = $"{t.Subject}|{t.Predicate}";
+                if(!subjPred_ObjectListDict.ContainsKey(key))
                 {
-                    obj = g.CreateLiteralNode(objStr);
+                    subjPred_ObjectListDict.Add(key, new List<string>(new string[] { t.Object.ToString() }));
                 }
-                else obj = g.CreateUriNode(new Uri(objStr));
-                g.Assert(subj, t.Predicate, obj);
+                else
+                {
+                    subjPred_ObjectListDict[key].Add(t.Object.ToString());
+                }
             }
+
+            foreach(var dKey in subjPred_ObjectListDict.Keys.ToArray())
+            {
+                if (subjPred_ObjectListDict[dKey].Count < 2)
+                    subjPred_ObjectListDict.Remove(dKey);
+                else
+                {
+                    //we've found ambiguity -> resolve it
+                    string resolution = subjPred_ObjectListDict[dKey][0];
+                    for (int i=1; i<subjPred_ObjectListDict[dKey].Count; i++)
+                    {
+                        resolution = resolver.Resolve(resolution, subjPred_ObjectListDict[dKey][i]);
+                    }
+
+                    //now put the resolution in the initial triple list
+                    Triple problemTriple = triplesToAdd.Find(t => $"{t.Subject}|{t.Predicate}" == dKey);
+                    IGraph g = problemTriple.Graph;
+                    INode obj = g.CreateLiteralNode(resolution);
+                    Triple correctTriple = new Triple(problemTriple.Subject, problemTriple.Predicate, obj);
+                    triplesToAdd.RemoveAll(t => $"{t.Subject}|{t.Predicate}" == dKey);  //remove ambiguous triples
+                    triplesToAdd.Add(correctTriple);    //add correct one instead
+                }
+            }
+        }
+
+        public static void MatchRecordsIFPAndStore(IGraph g, List<Triple> triplesToAddIn)
+        {
+            HashSet<string> IFPs = GetIFPsFromOntology(g);
+            var matchIFPDict = new Dictionary<string, List<string>>();
+            List<Triple> triplesToAdd = triplesToAddIn.ToList();
+            foreach(var triple in triplesToAdd)
+            {
+                string predStr = triple.Predicate.ToString();
+                string objStr = triple.Object.ToString();
+                string subjStr = triple.Subject.ToString();
+                if (IFPs.Contains(predStr))
+                {
+                    if (matchIFPDict.ContainsKey(objStr))
+                    {
+                        if(!matchIFPDict[objStr].Contains(subjStr))
+                            matchIFPDict[objStr].Add(subjStr);
+                    }
+                    else
+                        matchIFPDict.Add(objStr, new List<string>(new string[] { subjStr }));
+                }
+            }
+
+            if (matchIFPDict.Count > 0)
+            {
+                //compose unified IDs
+                Dictionary<string, string> unifiedIDs = new Dictionary<string, string>();
+
+                foreach (var key in matchIFPDict.Keys)
+                {
+                    Regex r = new Regex(@"((.+)/(.+)/(.+))/(.+)$");
+
+                    string classUri = r.Match(matchIFPDict[key][0]).Groups[1].Value;
+                    HashSet<string> superClassHSet = GetSuperOntologyClassesURI(g, classUri);
+
+                    for (int i = 1; i < matchIFPDict[key].Count; i++)
+                    {
+                        classUri = r.Match(matchIFPDict[key][i]).Groups[1].Value;
+
+                        HashSet<string> nextSuper = GetSuperOntologyClassesURI(g, classUri);
+                        if (nextSuper.Count > 0)
+                        {
+                            superClassHSet.IntersectWith(nextSuper);
+                        }
+                        else
+                        {
+                            matchIFPDict[key].RemoveAt(i); //it should be a FEDERATED class -> remove it from here
+                        }
+                    }
+                    //to final superClassHSet contains only those classes which are superclasses of all classes in matchIFPDict[key] list
+                    //we take the first one by default
+
+                    string federated_stem = superClassHSet.FirstOrDefault();
+                    if (federated_stem == null || federated_stem.Length == 0)
+                        throw new Exception("Federated stem derivation error!");
+
+                    string federated_uri = federated_stem + "/";    ///////!!!!
+                    foreach (var subj in matchIFPDict[key])
+                    {
+                        var match = r.Match(subj);
+                        federated_uri += match.Groups[3] + "." + match.Groups[5].Value + ".";
+                    }
+                    federated_uri = federated_uri.Remove(federated_uri.Length - 1, 1);
+
+
+                    foreach (var subj in matchIFPDict[key])
+                    {
+                        if (!unifiedIDs.ContainsKey(subj))
+                        {
+                            unifiedIDs.Add(subj, federated_uri);
+                        }
+                    }
+                }
+
+                foreach (Triple t in triplesToAdd.ToList())
+                {
+                    string subjStr = t.Subject.ToString(); //probably, unique ID
+                    if (!unifiedIDs.ContainsKey(subjStr))
+                        continue;
+
+                    subjStr = unifiedIDs[subjStr];
+                    string objStr = unifiedIDs.ContainsKey(t.Object.ToString()) ? unifiedIDs[t.Object.ToString()] : t.Object.ToString();
+
+
+                    INode subj = g.CreateUriNode(new Uri(subjStr));
+                    INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
+                    if (IsLiteralValue(objStr))
+                    {
+                        obj = g.CreateLiteralNode(objStr);
+                    }
+                    else obj = g.CreateUriNode(new Uri(objStr));
+                    g.Assert(subj, t.Predicate, obj);
+
+                    triplesToAdd.Remove(t);
+                }
+
+                //add the remaining ones
+                foreach (Triple t in triplesToAdd)
+                {
+                    g.Assert(t);
+                }
+            }
+            else
+            {
+                //IFP is empty, so just store all records
+                foreach(Triple t in triplesToAdd)
+                {
+                    g.Assert(t);
+                }
+            }
+        }
+
+        static HashSet<string> GetSuperOntologyClassesURI(IGraph ontoGraph, string subClassURI)
+        {
+            string queryStr = $"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> SELECT ?super WHERE {{ <{subClassURI}> rdfs:subClassOf ?super}}";
+
+            IGraph g = new VDS.RDF.Graph(ontoGraph.Triples);
+            RdfsReasoner reasoner = new RdfsReasoner();
+            //reasoner.Initialise(g);
+            //reasoner.Apply(g);
+
+            //SparqlParameterizedString queryString = new SparqlParameterizedString(query);
+
+            TripleStore store = new TripleStore();
+            store.Add(g);
+
+            SparqlQueryParser parser = new SparqlQueryParser();
+            SparqlQuery query = parser.ParseFromString(queryStr);
+            LeviathanQueryProcessor queryProcessor = new LeviathanQueryProcessor(store);
+            SparqlResultSet rset = queryProcessor.ProcessQuery(query) as SparqlResultSet;
+            HashSet<string> result = new HashSet<string>();
+
+            foreach(var r in rset)
+            {
+                result.Add(r.Value(r.Variables.First()).ToString());
+            }
+
+            return result;
         }
 
         static void CustomQuery()

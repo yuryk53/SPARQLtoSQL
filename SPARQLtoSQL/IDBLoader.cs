@@ -44,7 +44,7 @@ namespace SPARQLtoSQL
         /// <param name="prefixURI">Prefix URI to include in triples</param>
         /// <param name="obj">Object value in triple pattern</param>
         /// <returns>List of triple patterns for ?subject predicate object pattern</returns>
-        List<RawTriple> GetTriplesForPredicateObject(string tableName, string columnName, string prefixURI, string obj);
+        List<RawTriple> GetTriplesForPredicateObject(string tableName, string columnName, string prefixURI, string obj, List<string> IFPs=null);
         /// <summary>
         /// Given the subject in triple pattern, gets the triples that correspond to it
         /// </summary>

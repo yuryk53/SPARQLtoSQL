@@ -14,7 +14,7 @@ namespace SPARQLtoSQL
         /// Gets the table names of the database, represented by ConnectionString
         /// </summary>
         /// <returns>Table names</returns>
-        List<string> GetTableNames();
+        List<string> GetTableNames(bool includeViews = false);
         /// <summary>
         /// Gets the column names of the particular table in the DB
         /// </summary>
@@ -57,6 +57,18 @@ namespace SPARQLtoSQL
         /// <returns>List of triples for triple pattern SUBJECT ?predicate ?object </returns>
         List<RawTriple> GetTriplesForSubject(string tableName, string individualColName, string individualColValue,
                                                     string prefixURI, string predicateColName = null, string obj = null);
+
+        /// <summary>
+        /// Gets triples for predicate-object pattern where predicate refers to object property in ontology
+        /// </summary>
+        /// <param name="lhsTableName">Concept which is the domain of object property</param>
+        /// <param name="nmTableName">Table name, inferred from object property URI</param>
+        /// <param name="rhsTableName">Concept which is the range of object property</param>
+        /// <param name="prefixURI">Prefix URI to include in triples</param>
+        /// <param name="obj">Object value in triple pattern</param>
+        /// <returns>List of raw triples</returns>
+        List<RawTriple> GetTriplesForPredicateObject_ObjProperty(string lhsTableName, string nmTableName, string rhsTableName, 
+                                                                 string prefixURI, string colName = null, string obj = null);
         #endregion
 
         /// <summary>

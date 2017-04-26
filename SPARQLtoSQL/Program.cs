@@ -16,6 +16,7 @@ using VDS.RDF.Query.Inference;
 using VDS.RDF.Storage;
 using VDS.RDF.Query.Algebra;
 using VDS.RDF.Query.Patterns;
+using VDS.RDF.Ontology;
 
 namespace SPARQLtoSQL
 {
@@ -43,8 +44,8 @@ namespace SPARQLtoSQL
             //Console.WriteLine(mappings[":hasName"][0].IsMatch("?x", ":hasName", ":Neoplasm"));
 
             dbURIs = new Dictionary<string, string>();
-            dbURIs.Add("http://www.semanticweb.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
-            dbURIs.Add("http://www.semanticweb.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
+            dbURIs.Add("http://www.example.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
+            dbURIs.Add("http://www.example.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
 
             DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
                 @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True",
@@ -71,7 +72,8 @@ namespace SPARQLtoSQL
             value = value.TrimStart().TrimEnd();
             bool hasQuotes = (value[0] == '"' && value[value.Length - 1] == '"');
             bool hasAngleBracket = (value[0] == '<' && value[value.Length - 1] == '>');
-            return hasQuotes || !hasAngleBracket;
+
+            return (hasQuotes || !hasAngleBracket) && !Uri.IsWellFormedUriString(value, UriKind.Absolute);
         }
 
         public static void ResolveBGPsFromDB(ISparqlAlgebra algebra, IGraph g, Dictionary<string,string> dbURIs, DBLoaderFactory dbLoaderFactory, List<Triple> triplesToAdd)
@@ -79,6 +81,9 @@ namespace SPARQLtoSQL
             if(algebra is IBgp)
             {
                 HashSet<string> IFPs = GetIFPsFromOntology(g);
+                
+                OntologyGraph ontoGraph = new OntologyGraph();
+                ontoGraph.Merge(g);
 
                 IBgp bgp = algebra as IBgp;
                 //do work here
@@ -279,7 +284,11 @@ namespace SPARQLtoSQL
                         {
                             INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                             INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                            INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                            INode obj = null;
+                            if (IsLiteralValue(rawTriple.Obj))
+                                obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
+                            else
+                                obj = g.CreateUriNode(new Uri(rawTriple.Obj));
                             triplesToAdd.Add(new Triple(subj, pred, obj));
                             //g.Assert(new Triple(subj, pred, obj));
                         }
@@ -312,7 +321,11 @@ namespace SPARQLtoSQL
                                 {
                                     INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                                     INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                                    INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                                    INode obj = null;
+                                    if (IsLiteralValue(rawTriple.Obj))
+                                        obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
+                                    else
+                                        obj = g.CreateUriNode(new Uri(rawTriple.Obj));
 
                                     //добавить сущности в кластер по IFP
                                     //if (IFPs.Contains(rawTriple.Pred))
@@ -355,18 +368,42 @@ namespace SPARQLtoSQL
                             */
                             IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
                             Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
-                            List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
-                                tableName: dbInfo["tableName"],
-                                columnName: dbInfo["columnName"],
-                                prefixURI: dbInfo["prefix"],
-                                obj: null,
-                                IFPs: GetIFPsFromOntology(g).ToList());
+                            
+                            //check if predicate is an object property
+                            List<RawTriple> rawTriples = null;
+                            OntologyProperty oprop = ontoGraph.OwlObjectProperties.Where(
+                                prop => prop.ToString() == triple.Predicate.ToString().Replace("<", "").Replace(">","")).FirstOrDefault();
+
+                            if (oprop != null) //predicate refers to an object property
+                            {
+                                string propRange = oprop.Ranges.First().Resource.ToString();
+                                string rhsTableName = propRange.Substring(propRange.LastIndexOf('/')+1);
+
+                                rawTriples = dbLoader.GetTriplesForPredicateObject_ObjProperty(
+                                    lhsTableName: dbInfo["tableName"],
+                                    nmTableName: dbInfo["columnName"], //it's mapped as a column name
+                                    rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
+                                    prefixURI: dbInfo["prefix"],
+                                    obj: null);
+                            }
+                            else {  //a dataType property
+                                rawTriples = dbLoader.GetTriplesForPredicateObject(
+                                    tableName: dbInfo["tableName"],
+                                    columnName: dbInfo["columnName"],
+                                    prefixURI: dbInfo["prefix"],
+                                    obj: null,
+                                    IFPs: GetIFPsFromOntology(g).ToList());
+                            }
 
                             foreach (var rawTriple in rawTriples)
                             {
                                 INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
                                 INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                                INode obj = g.CreateLiteralNode($"{rawTriple.Obj}");
+                                INode obj = null;
+                                if (IsLiteralValue(rawTriple.Obj))
+                                    obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
+                                else
+                                    obj = g.CreateUriNode(new Uri(rawTriple.Obj));
 
                                 //добавить сущности в кластер по IFP
                                 //if (IFPs.Contains(rawTriple.Pred))
@@ -386,7 +423,8 @@ namespace SPARQLtoSQL
                     if(objConnString != null) //object is not a pattern
                     {
                         //TODO
-                        throw new NotImplementedException();
+                        
+                        //throw new NotImplementedException();
                     }
 
                     //check if subj, pred and obj refer to one DB
@@ -510,7 +548,8 @@ namespace SPARQLtoSQL
         static void CustomQueryLMS_KMS()
         {
             IGraph g = new VDS.RDF.Graph();                 //Load triples from file OWL
-            g.LoadFromFile("combined.owl");
+            //g.LoadFromFile("combined.owl");
+            g.LoadFromFile("kms-lms_merged.owl");
             g.BaseUri = null; //!
 
             //INode subj = g.CreateUriNode(new Uri("http://www.semanticweb.org/KMS/User/1"));
@@ -558,11 +597,16 @@ namespace SPARQLtoSQL
             //                            SELECT ?u ?p ?o WHERE {?u rdfs:subClassOf <http://www.semanticweb.org/FEDERATED/Kunde>.
             //                                             ?u <http://www.semanticweb.org/FEDERATED/Kunde#NAME> ?o}";
 
-            queryString.CommandText = @"SELECT *
-                                        WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/User#NAME> ?name.
-                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#EMAIL> ?email.
-                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#LMS.ID> ?lmdID.
-                                                ?kunde <http://www.semanticweb.org/FEDERATED/User#KMS.ID> ?kmsID.}";
+            //queryString.CommandText = @"SELECT *
+            //                            WHERE { ?kunde <http://www.semanticweb.org/FEDERATED/User#NAME> ?name.
+            //                                    ?kunde <http://www.semanticweb.org/FEDERATED/User#EMAIL> ?email.
+            //                                    ?kunde <http://www.semanticweb.org/FEDERATED/User#LMS.ID> ?lmdID.
+            //                                    ?kunde <http://www.semanticweb.org/FEDERATED/User#KMS.ID> ?kmsID.}";
+
+            queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                        SELECT *
+                                        WHERE { ?u <http://www.example.org/KMS/User#User_Group> ?group.
+                                                ?group <http://www.example.org/KMS/Group#NAME> ?gname.}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());

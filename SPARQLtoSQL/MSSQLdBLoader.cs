@@ -44,7 +44,7 @@ namespace SPARQLtoSQL
             this.connString = connString;
         }
 
-        public List<string> GetTableNames()
+        public List<string> GetTableNames(bool includeViews = false)
         {
             List<string> tables = new List<string>();
 
@@ -55,6 +55,15 @@ namespace SPARQLtoSQL
                 foreach (DataRow row in schema.Rows)
                 {
                     tables.Add((string)row[2]);
+                }
+
+                if (!includeViews)
+                {
+                    schema = conn.GetSchema("Views");
+                    foreach (DataRow row in schema.Rows)
+                    {
+                        tables.Remove((string)row[2]);
+                    }
                 }
             }
             tables.Remove("sysdiagrams");
@@ -123,6 +132,77 @@ namespace SPARQLtoSQL
             return triples;
         }
 
+        public List<RawTriple> GetTriplesForPredicateObject_ObjProperty(string lhsTableName, string nmTableName, string rhsTableName, string prefixURI, string colName=null, string obj=null)
+        {
+            List<RawTriple> triples = new List<RawTriple>();
+            if (obj != null)
+            {
+                obj = obj.Trim('"');
+            }
+
+            //n:m table should have exactly 2 foreign keys, otherwise we might get incorrect results
+            string lhsPK = GetPrimaryKeys(GetDBName(), lhsTableName)[0];
+            string rhsPK = GetPrimaryKeys(GetDBName(), rhsTableName)[0];
+
+            string nmFK_lhsPK = GetFKReferencingPKTable(
+                dbName: this.GetDBName(),
+                pkTableName: lhsTableName,
+                referencingTable: nmTableName);
+
+            string nmFK_rhsPK = GetFKReferencingPKTable(
+                dbName: this.GetDBName(),
+                pkTableName: rhsTableName,
+                referencingTable: nmTableName);
+
+            using (SqlConnection conn = new SqlConnection(connString))
+            {
+                SqlCommand cmd = conn.CreateCommand();
+
+                if (obj != null)
+                {
+                    if (colName == null)
+                        throw new ArgumentNullException("Column name cannot be null, when object is specified!");
+
+                    cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                                                [{lhsTableName}].[{lhsPK}] AS lhsPK
+                                                   FROM [{lhsTableName}]
+                                                   INNER JOIN [{nmTableName}] ON [{lhsTableName}].[{lhsPK}] = [{nmTableName}].[{nmFK_lhsPK}]
+                                                   INNER JOIN [{rhsTableName}] ON [{rhsTableName}].[{rhsPK}] = [{nmTableName}].[{nmFK_rhsPK}]
+                                        WHERE @colName=@obj";
+                    cmd.Parameters.AddWithValue("@colName", colName);   //==predicate
+                    cmd.Parameters.AddWithValue("@obj", obj);
+                    
+                }
+                else
+                {
+                    cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                                                [{lhsTableName}].[{lhsPK}] AS lhsPK
+                                                   FROM [{lhsTableName}]
+                                                   INNER JOIN [{nmTableName}] ON [{lhsTableName}].[{lhsPK}] = [{nmTableName}].[{nmFK_lhsPK}]
+                                                   INNER JOIN [{rhsTableName}] ON [{rhsTableName}].[{rhsPK}] = [{nmTableName}].[{nmFK_rhsPK}]";
+                }
+                conn.Open();
+                SqlDataReader reader = cmd.ExecuteReader();
+                int counter = 0; //in case there's no ID field
+                string dbName = GetDBName();
+                //string rhsPK = GetPrimaryKeys(GetDBName(), rhsTableName)[0];
+                //string lhsPK = GetPrimaryKeys(GetDBName(), lhsTableName)[0];
+
+                while (reader.Read())
+                {
+                    counter++;
+                    RawTriple triple = new RawTriple
+                    {
+                        Subj = $"{prefixURI}{dbName}/{lhsTableName}/{lhsPK}.{(reader["lhsPK"] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                        Pred = $"{prefixURI}{dbName}/{lhsTableName}#{nmTableName}",
+                        Obj = obj ?? $"{prefixURI}{dbName}/{rhsTableName}/{rhsPK}.{(reader["rhsPK"] ?? counter)}"
+                    };
+                    triples.Add(triple);
+                }
+            }
+            return triples;
+        }
+
         public List<RawTriple> GetTriplesForPredicateObject(string tableName, string columnName, string prefixURI, string obj, List<string> IFPs=null)
         {
             List<RawTriple> triples = new List<RawTriple>();
@@ -136,7 +216,7 @@ namespace SPARQLtoSQL
 
                 if (obj != null)
                 {
-                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {columnName}='{obj}'";
+                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {columnName}='{RemoveXSDType(obj)}'";
                 }
                 else
                 {
@@ -156,6 +236,16 @@ namespace SPARQLtoSQL
                         Pred = $"{prefixURI}{dbName}/{tableName}#{columnName}",
                         Obj = obj ?? reader[columnName].ToString()
                     };
+                    ////////////////////////
+                    if(obj == null || !triple.Obj.Contains("^^xsd:")) //if object was not specified by user or if user didn't specify the dataType by himself
+                    {
+                        //attach a datatype
+                        string xsdType = MappingGenerator.SqlToXsdDtMapper.MapSqlToXSD(GetColumnSqlDataType(tableName, columnName));
+                        if (xsdType != "string")
+                        {
+                            triple.Obj += $"^^xsd:{xsdType}";
+                        }
+                    } 
                     triples.Add(triple);
 
                     if(IFPs!= null)
@@ -180,6 +270,28 @@ namespace SPARQLtoSQL
                 }
             }
             return triples;
+        }
+
+        private string GetColumnSqlDataType(string tableName, string columnName)
+        {
+            string dType = string.Empty;
+            using (SqlConnection conn = new SqlConnection(connString))
+            {
+                conn.Open();
+                DataTable schema = conn.GetSchema("Columns");
+
+                dType = (from DataRow row in schema.Rows
+                        where ((string)row[2]) == tableName &&
+                              ((string)row[3]) == columnName
+                        select (string)row[7]).First();
+
+                return dType;
+            }
+        }
+
+        private string RemoveXSDType(string xsdObjectString)
+        {
+            return xsdObjectString.Replace("xsd:", "");
         }
 
         public List<RawTriple> GetTriplesForSubject(string tableName, string individualColName, string individualColValue,
@@ -287,7 +399,7 @@ namespace SPARQLtoSQL
             return triples;
         }
 
-        private List<string> GetPrimaryKeys(string dbName, string tableName)
+        public List<string> GetPrimaryKeys(string dbName, string tableName)
         {
             SqlConnection sqlConnection = new SqlConnection(connString);
             //build a "serverConnection" with the information of the "sqlConnection"
@@ -309,9 +421,46 @@ namespace SPARQLtoSQL
             return pkList;
         }
 
-        List<string> IDBLoader.GetPrimaryKeys(string dbName, string tableName)
+        public string GetFKReferencingPKTable(string dbName, string pkTableName, string referencingTable)
         {
-            throw new NotImplementedException();
+            SqlConnection sqlConnection = new SqlConnection(connString);
+            //build a "serverConnection" with the information of the "sqlConnection"
+            ServerConnection serverConnection = new ServerConnection(sqlConnection);
+
+            //The "serverConnection is used in the ctor of the Server.
+            Server server = new Server(serverConnection);
+            Database db = server.Databases[dbName];
+
+            Table tbl = db.Tables[referencingTable];
+
+            foreach (ForeignKey fk in tbl.ForeignKeys)
+            {
+                if (fk.ReferencedTable.ToString() == pkTableName)
+                    return fk.Columns[0].Name;
+            }
+
+            throw new KeyNotFoundException($"Foreign key referencing table '{referencingTable}' was not found in table '{pkTableName}'");
+        }
+
+        public string GetPKReferencedByFK(string dbName, string fkTableName, string fkName)
+        {
+            SqlConnection sqlConnection = new SqlConnection(connString);
+            //build a "serverConnection" with the information of the "sqlConnection"
+            ServerConnection serverConnection = new ServerConnection(sqlConnection);
+
+            //The "serverConnection is used in the ctor of the Server.
+            Server server = new Server(serverConnection);
+            Database db = server.Databases[dbName];
+
+            Table tbl = db.Tables[fkTableName];
+
+            foreach (ForeignKey fk in tbl.ForeignKeys)
+            {
+                if (fk.Name == fkName)
+                    return fk.ReferencedKey;
+            }
+
+            throw new KeyNotFoundException($"Primary key referenced by FK '{fkName}' in table '{fkTableName}' was not found!");
         }
     }
 }

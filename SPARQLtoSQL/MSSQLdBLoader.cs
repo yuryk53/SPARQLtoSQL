@@ -168,10 +168,8 @@ namespace SPARQLtoSQL
                                                    FROM [{lhsTableName}]
                                                    INNER JOIN [{nmTableName}] ON [{lhsTableName}].[{lhsPK}] = [{nmTableName}].[{nmFK_lhsPK}]
                                                    INNER JOIN [{rhsTableName}] ON [{rhsTableName}].[{rhsPK}] = [{nmTableName}].[{nmFK_rhsPK}]
-                                        WHERE @colName=@obj";
-                    cmd.Parameters.AddWithValue("@colName", colName);   //==predicate
-                    cmd.Parameters.AddWithValue("@obj", obj);
-                    
+                                        WHERE [{rhsTableName}].[{colName}]={obj}";
+                    //colName == predicate
                 }
                 else
                 {
@@ -191,11 +189,13 @@ namespace SPARQLtoSQL
                 while (reader.Read())
                 {
                     counter++;
+                    object o1 = reader[0];
+                    object o2 = reader[1];
                     RawTriple triple = new RawTriple
                     {
                         Subj = $"{prefixURI}{dbName}/{lhsTableName}/{lhsPK}.{(reader["lhsPK"] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
                         Pred = $"{prefixURI}{dbName}/{lhsTableName}#{nmTableName}",
-                        Obj = obj ?? $"{prefixURI}{dbName}/{rhsTableName}/{rhsPK}.{(reader["rhsPK"] ?? counter)}"
+                        Obj = $"{prefixURI}{dbName}/{rhsTableName}/{rhsPK}.{(reader["rhsPK"] ?? counter)}"
                     };
                     triples.Add(triple);
                 }
@@ -385,11 +385,14 @@ namespace SPARQLtoSQL
                     {
                         for(int i=0; i<reader.FieldCount; i++)
                         {
+                            string objStr = reader[i].ToString();
+                            if (string.IsNullOrEmpty(objStr))
+                                continue;
                             RawTriple triple = new RawTriple
                             {
                                 Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
                                 Pred = $"{prefixURI}{dbName}/{tableName}#{reader.GetName(i)}",
-                                Obj = reader[i].ToString()
+                                Obj = objStr
                             };
                             triples.Add(triple);
                         }

@@ -70,6 +70,8 @@ namespace SPARQLtoSQL
         static bool IsLiteralValue(string value)
         {
             value = value.TrimStart().TrimEnd();
+            if (string.IsNullOrEmpty(value) || string.IsNullOrWhiteSpace(value))
+                return false;
             bool hasQuotes = (value[0] == '"' && value[value.Length - 1] == '"');
             bool hasAngleBracket = (value[0] == '<' && value[value.Length - 1] == '>');
 
@@ -103,8 +105,8 @@ namespace SPARQLtoSQL
                     string subjConnString = GetConnStringFromURI(dbURIs, triple.Subject.ToString());
                     string predConnString = GetConnStringFromURI(dbURIs, triple.Predicate.ToString());
                     string objConnString = GetConnStringFromURI(dbURIs, triple.Object.ToString());
-
-                    if(subjConnString==null && predConnString==null && objConnString==null)
+                    #region FEDERATED SCHEMA PROCESSING
+                    if (subjConnString==null && predConnString==null && objConnString==null)
                     {
                         //we deal with request to FEDERATED schema or it's an error
                         //if it's FEDERATED schema, we should find subclasses/subproperties, equivalent classes/properties and query for them
@@ -127,20 +129,6 @@ namespace SPARQLtoSQL
 
                             //---------------------------------------------------------------------------------
                             //--------------------------PROCESS owl:equivalentProperty-------------------------
-                            //also rdfs:subPropertyOf and rdfs:subClassOf should be processed separately
-
-                            //SparqlParameterizedString queryString = new SparqlParameterizedString();
-
-                            //queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
-                            //queryString.CommandText = @"SELECT ?property1 WHERE {
-                            //                            ?property owl:equivalentProperty ?property1
-                            //                            filter regex(str(?property), '^"+triple.Predicate.ToString().Trim('<','>')+"')}";
-
-                            //SparqlQueryParser parser = new SparqlQueryParser();
-                            //SparqlQuery query = parser.ParseFromString(queryString.ToString());
-
-                            //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
-                            //var results = processor.ProcessQuery(query) as SparqlResultSet;
                             var results = GetEquivalentProperties(triple.Predicate.ToString(), store);
                             Console.WriteLine();
 
@@ -149,7 +137,16 @@ namespace SPARQLtoSQL
                             {
                                 //query with new predicates and transform the results to FEDERATED schema syntax
                                 SparqlParameterizedString queryString = new SparqlParameterizedString();
-                                queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.ToString()} }} ";
+                                if (IsLiteralValue(triple.Object.ToString()))
+                                {
+                                    queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.ToString()} }} ";
+                                }
+                                else
+                                {
+                                    //if object is a URI (i.e. ?subj <fedPred> <fedObj>) which corresponds to federated schema
+                                    //we should resolve underlying equivalent OBJECT subproperties for <fedObj> 
+                                    throw new NotImplementedException();
+                                }
                                 SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
 
                                 string federatedStem = triple.Predicate.ToString().Trim('<', '>').Split('#')[0]; //left part (before '#') -> /FEDERATED/table name
@@ -157,6 +154,7 @@ namespace SPARQLtoSQL
 
                                 foreach (SparqlResult result in resultSet)
                                 {
+                                    //convert to federated shema syntax
                                     Dictionary<string, string> dbInfo = GetDatabaseInfoForIndividualURI(result[0].ToString());
                                     string subjStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
                                     string predStr = triple.Predicate.ToString().Trim('<', '>');
@@ -168,7 +166,7 @@ namespace SPARQLtoSQL
                                     else //object was a pattern ?object in sparql query
                                     {
                                         //dbInfo = GetDatabaseInfoForIndividualURI(result[1].ToString());
-                                        if(IsLiteralValue(result[1].ToString()))
+                                        if (IsLiteralValue(result[1].ToString()))
                                         {
                                             objStr = result[1].ToString();
                                         }
@@ -176,12 +174,12 @@ namespace SPARQLtoSQL
                                         {
                                             dbInfo = GetDatabaseInfoForIndividualURI(result[1].ToString());
                                             objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
-                                        } 
+                                        }
                                     }
 
 
                                     //USE ANOTHER MATCHING TECHNIQUES HERE (i.e. lexicographical matching)
-                                    
+
                                     //вместо IFPs.Contains(predStr) можно сделать функцию лексикографического расстояния
                                     //тоесть, если LexDistance(IFPs, predStr) <= someThreshold, считать записи одинаковыми
                                     //только, вместо IFPs должна быть другая таблица с названиями аттрбутов (predicates)
@@ -193,55 +191,42 @@ namespace SPARQLtoSQL
                                     //а помечать такие (похожие) поля может программа, которая составляет онтологию с помощью
                                     //общедоступных онтологий (сопосталяемые классы должны обязательно наследоветь FEDERATED класс)
 
-                                    //добавить сущности в кластер по IFP
-                                    //if(IFPs.Contains(predStr))
-                                    //{
-                                    //    if (matchIFPDict.ContainsKey(objStr))
-                                    //    {
-                                    //        matchIFPDict[objStr].Add(subjStr);
-                                    //    }
-                                    //    else matchIFPDict.Add(objStr, new List<string>(new string[] { subjStr }));
-                                    //}
-
                                     //here we obtain triples from underling DBs - KMS+LMS
                                     //these triples should be matched here ON Inverse Functional Properties
-                                    INode subj = g.CreateUriNode(new Uri(subjStr));
-                                    INode pred = g.CreateUriNode(new Uri(predStr));
-                                    INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
-                                    if (IsLiteralValue(objStr))
-                                    {
-                                        obj = g.CreateLiteralNode(objStr);
-                                    }
-                                    else obj = g.CreateUriNode(new Uri(objStr));
-                                    triplesToAdd.Add(new Triple(subj, pred, obj));
-                                    //if(triplesToAdd==null && matchIFPDict==null)
-                                    //{
-                                    //    g.Assert(new Triple(subj, pred, obj));
-                                    //   // triplesToAdd.Add(new Triple(subj, pred, obj));
-                                    //}
-                                    //g.Assert(new Triple(subj, pred, obj));
+                                    AddRawTripleToList(g, triplesToAdd, subjStr, predStr, objStr);
                                 }
                             }
-
-
                             //throw new NotImplementedException();
-
                         }
                         if(triple.Object.VariableName == null) //is not a pattern
                         {
                             if(!IsLiteralValue(triple.Object.ToString()))
                             {
-                                //SKIP IT
-                                ;
+                                // ?subject <predicate> <object>
+                                //<predicate> must refer to an OBJECT PROPERTY!!! otherwise it's a logical error!
+
+                                //List<RawTriple> rawTriples = null;
+                                //rawTriples = ResolveTriplesForPredObj_ObjectProperty(dbLoaderFactory, ontoGraph, triple, predConnString);
+
+                                //foreach (var rawTriple in rawTriples)
+                                //{
+                                //    AddRawTripleToList(g, triplesToAdd, rawTriple);
+                                //}
                                 //throw new InvalidOperationException("Object variable in tripple, referring to FEDERATED schema should be a PATTERN!");
-                                //throw new NotImplementedException();
+                                throw new NotImplementedException();
                             }
-                            
+                            else
+                            {
+                                //object is a literal value
+                                // ?subject <predicate> "object"
+                                throw new NotImplementedException();
+                            }
+
                         }
                         //throw new NotImplementedException();
                     }
-
-                    if(subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
+                    #endregion
+                    if (subjConnString != null) //most probably, subjectConnString will be NULL (cause subject may be a pattern)
                     {
                         //TODO
                         //if subj is not a literal, we should query DB for subj triples!!!
@@ -282,15 +267,7 @@ namespace SPARQLtoSQL
                         );
                         foreach (var rawTriple in rawTriples)
                         {
-                            INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
-                            INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                            INode obj = null;
-                            if (IsLiteralValue(rawTriple.Obj))
-                                obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
-                            else
-                                obj = g.CreateUriNode(new Uri(rawTriple.Obj));
-                            triplesToAdd.Add(new Triple(subj, pred, obj));
-                            //g.Assert(new Triple(subj, pred, obj));
+                            AddRawTripleToList(g, triplesToAdd, rawTriple);
                         }
                     }
                     if(predConnString != null)
@@ -319,25 +296,7 @@ namespace SPARQLtoSQL
 
                                 foreach (var rawTriple in rawTriples)
                                 {
-                                    INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
-                                    INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                                    INode obj = null;
-                                    if (IsLiteralValue(rawTriple.Obj))
-                                        obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
-                                    else
-                                        obj = g.CreateUriNode(new Uri(rawTriple.Obj));
-
-                                    //добавить сущности в кластер по IFP
-                                    //if (IFPs.Contains(rawTriple.Pred))
-                                    //{
-                                    //    if (matchIFPDict.ContainsKey(rawTriple.Obj))
-                                    //    {
-                                    //        matchIFPDict[rawTriple.Obj].Add(rawTriple.Subj);
-                                    //    }
-                                    //    else matchIFPDict.Add(rawTriple.Obj, new List<string>(new string[] { rawTriple.Subj }));
-                                    //}
-                                    triplesToAdd.Add(new Triple(subj, pred, obj));
-                                    //g.Assert(new Triple(subj, pred, obj));
+                                    AddRawTripleToList(g, triplesToAdd, rawTriple);
                                 }
                             }
                             else if(objConnString!= null) //object is a URI
@@ -354,7 +313,14 @@ namespace SPARQLtoSQL
                                         FROM [LMS].User
                                         WHERE User.ROLE_ID=1
                                 */
-                                throw new NotImplementedException();
+                                List<RawTriple> rawTriples = null;
+                                rawTriples = ResolveTriplesForPredObj_ObjectProperty(dbLoaderFactory, ontoGraph, triple, predConnString);
+
+                                foreach (var rawTriple in rawTriples)
+                                {
+                                    AddRawTripleToList(g, triplesToAdd, rawTriple);
+                                }
+                                //throw new NotImplementedException();
                             }
                         }
                         else //object is a pattern
@@ -366,14 +332,12 @@ namespace SPARQLtoSQL
                                 FROM table(predicate)
                                 WHERE table.Attribute="Object"
                             */
+                            List<RawTriple> rawTriples = null;
+
                             IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
                             Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
-                            
                             //check if predicate is an object property
-                            List<RawTriple> rawTriples = null;
-                            OntologyProperty oprop = ontoGraph.OwlObjectProperties.Where(
-                                prop => prop.ToString() == triple.Predicate.ToString().Replace("<", "").Replace(">","")).FirstOrDefault();
-
+                            OntologyProperty oprop = TryResolveObjectProperty(ontoGraph, triple.Predicate.ToString());
                             if (oprop != null) //predicate refers to an object property
                             {
                                 string propRange = oprop.Ranges.First().Resource.ToString();
@@ -397,25 +361,7 @@ namespace SPARQLtoSQL
 
                             foreach (var rawTriple in rawTriples)
                             {
-                                INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
-                                INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
-                                INode obj = null;
-                                if (IsLiteralValue(rawTriple.Obj))
-                                    obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
-                                else
-                                    obj = g.CreateUriNode(new Uri(rawTriple.Obj));
-
-                                //добавить сущности в кластер по IFP
-                                //if (IFPs.Contains(rawTriple.Pred))
-                                //{
-                                //    if (matchIFPDict.ContainsKey(rawTriple.Obj))
-                                //    {
-                                //        matchIFPDict[rawTriple.Obj].Add(rawTriple.Subj);
-                                //    }
-                                //    else matchIFPDict.Add(rawTriple.Obj, new List<string>(new string[] { rawTriple.Subj }));
-                                //}
-                                triplesToAdd.Add(new Triple(subj, pred, obj));
-                                //g.Assert(new Triple(subj, pred, obj));
+                                AddRawTripleToList(g, triplesToAdd, rawTriple);
                             }
                         }
 
@@ -423,12 +369,18 @@ namespace SPARQLtoSQL
                     if(objConnString != null) //object is not a pattern
                     {
                         //TODO
-                        
-                        //throw new NotImplementedException();
+                        //in ?subject <predicate><object>, <predicate> refers to an OBJECT PROPERTY!
+
+                        List<RawTriple> rawTriples = null;
+                        rawTriples = ResolveTriplesForPredObj_ObjectProperty(dbLoaderFactory, ontoGraph, triple, predConnString);
+
+                        foreach (var rawTriple in rawTriples)
+                        {
+                            AddRawTripleToList(g, triplesToAdd, rawTriple);
+                        }
                     }
 
                     //check if subj, pred and obj refer to one DB
-
                 }
             }
             else
@@ -444,6 +396,87 @@ namespace SPARQLtoSQL
                     ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory, triplesToAdd);
                 }
             }
+        }
+
+        private static List<RawTriple> ResolveTriplesForPredObj_ObjectProperty(DBLoaderFactory dbLoaderFactory, OntologyGraph ontoGraph, 
+                                                                               TriplePattern triple, string predConnString)
+        {
+            List<RawTriple> rawTriples;
+            IDBLoader dbLoader = dbLoaderFactory.GetDBLoader(predConnString);
+            Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
+            //check if predicate is an object property
+            OntologyProperty oprop = TryResolveObjectProperty(ontoGraph, triple.Predicate.ToString());
+
+            if (oprop != null) //predicate refers to an object property
+            {
+                string propRange = oprop.Ranges.First().Resource.ToString();
+                string rhsTableName = propRange.Substring(propRange.LastIndexOf('/') + 1);
+                string objString = null;
+                if (triple.Object.VariableName == null)   //is not a pattern => should have object URI- string
+                {
+                    objString = triple.Object.ToString(); //a URI, resolve column name from individual URI string
+                    //objString is like <http://www.example.org/KMS/Group/ID.1>, we have to extract 'ID' part
+                    string colName = objString.Substring(startIndex: 0, length: objString.LastIndexOf('.'));
+                    colName = colName.Substring(startIndex: colName.LastIndexOf('/') + 1);
+
+                    string colValue = objString.Substring(startIndex: objString.LastIndexOf('.') + 1).TrimEnd('>');
+
+                    rawTriples = dbLoader.GetTriplesForPredicateObject_ObjProperty(
+                        lhsTableName: dbInfo["tableName"],
+                        nmTableName: dbInfo["columnName"], //it's mapped as a column name
+                        rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
+                        prefixURI: dbInfo["prefix"],
+                        colName: colName,
+                        obj: colValue);
+                }
+                else {
+                    rawTriples = dbLoader.GetTriplesForPredicateObject_ObjProperty(
+                        lhsTableName: dbInfo["tableName"],
+                        nmTableName: dbInfo["columnName"], //it's mapped as a column name
+                        rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
+                        prefixURI: dbInfo["prefix"],
+                        obj: null);
+                }
+            }
+            else throw new ArgumentException("If <predicate><object> pattern is specified, <predicate> should refer to Object Property!!!");
+            return rawTriples;
+        }
+
+        /// <summary>
+        /// Tries to resolve an object property from the ontology graph by given predicate URI
+        /// </summary>
+        /// <param name="ontoGraph">Ontology graph, where predicate is defined</param>
+        /// <param name="predicate">Predicate URI in format <http://example.org/KMS/User_Group></param>
+        /// <returns>ObjectProperty, if predicate URI refers to object property in ontology graph OR NULL, if ObjectProperty was not found</returns>
+        private static OntologyProperty TryResolveObjectProperty(OntologyGraph ontoGraph, string predicate)
+        {
+            OntologyProperty oprop = ontoGraph.OwlObjectProperties.Where(
+                                prop => prop.ToString() == predicate.Replace("<", "").Replace(">", "")).FirstOrDefault();
+
+            return oprop;
+        }
+
+        private static void AddRawTripleToList(IGraph g, List<Triple> triplesToAdd, string subjStr, string predStr, string objStr)
+        {
+            RawTriple rt = new RawTriple
+            {
+                Subj = subjStr,
+                Pred = predStr,
+                Obj = objStr
+            };
+            AddRawTripleToList(g, triplesToAdd, rt);
+        }
+
+        private static void AddRawTripleToList(IGraph g, List<Triple> triplesToAdd, RawTriple rawTriple)
+        {
+            INode subj = g.CreateUriNode(new Uri(rawTriple.Subj));
+            INode pred = g.CreateUriNode(new Uri(rawTriple.Pred));
+            INode obj = null;
+            if (IsLiteralValue(rawTriple.Obj))
+                obj = g.CreateLiteralNode($"{rawTriple.Obj}");    //!!!!!!!!!!!!!
+            else
+                obj = g.CreateUriNode(new Uri(rawTriple.Obj));
+            triplesToAdd.Add(new Triple(subj, pred, obj));
         }
 
         private static SparqlResultSet GetEquivalentProperties(string property, TripleStore store)
@@ -605,8 +638,8 @@ namespace SPARQLtoSQL
 
             queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                                         SELECT *
-                                        WHERE { ?u <http://www.example.org/KMS/User#User_Group> ?group.
-                                                ?group <http://www.example.org/KMS/Group#NAME> ?gname.}";
+                                        WHERE { ?u <http://www.example.org/KMS/User#User_Group> <http://www.example.org/KMS/Group/ID.1>.
+                                                <http://www.example.org/KMS/Group/ID.1> ?pred ?obj}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());
@@ -687,7 +720,14 @@ namespace SPARQLtoSQL
                     //now put the resolution in the initial triple list
                     Triple problemTriple = triplesToAdd.Find(t => $"{t.Subject}|{t.Predicate}" == dKey);
                     IGraph g = problemTriple.Graph;
-                    INode obj = g.CreateLiteralNode(resolution);
+                    INode obj = null;// g.CreateLiteralNode(resolution);
+                    if (IsLiteralValue(resolution))
+                    {
+                        obj = g.CreateLiteralNode(resolution);
+                    }
+                    else
+                        obj = g.CreateUriNode(new Uri(resolution));
+
                     Triple correctTriple = new Triple(problemTriple.Subject, problemTriple.Predicate, obj);
                     triplesToAdd.RemoveAll(t => $"{t.Subject}|{t.Predicate}" == dKey);  //remove ambiguous triples
                     triplesToAdd.Add(correctTriple);    //add correct one instead

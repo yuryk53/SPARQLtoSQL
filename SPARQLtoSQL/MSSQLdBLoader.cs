@@ -144,15 +144,27 @@ namespace SPARQLtoSQL
             string lhsPK = GetPrimaryKeys(GetDBName(), lhsTableName)[0];
             string rhsPK = GetPrimaryKeys(GetDBName(), rhsTableName)[0];
 
-            string nmFK_lhsPK = GetFKReferencingPKTable(
-                dbName: this.GetDBName(),
-                pkTableName: lhsTableName,
-                referencingTable: nmTableName);
+            string nmFK_lhsPK = null;
+            string nmFK_rhsPK = null;
+            bool nmTableExist = true;
+        
+            try {
+                nmFK_lhsPK = GetFKReferencingPKTable(
+                    dbName: this.GetDBName(),
+                    pkTableName: lhsTableName,
+                    referencingTable: nmTableName);
 
-            string nmFK_rhsPK = GetFKReferencingPKTable(
-                dbName: this.GetDBName(),
-                pkTableName: rhsTableName,
-                referencingTable: nmTableName);
+
+                nmFK_rhsPK = GetFKReferencingPKTable(
+                    dbName: this.GetDBName(),
+                    pkTableName: rhsTableName,
+                    referencingTable: nmTableName);
+            }catch(NullReferenceException ex)
+            {
+                //it means, that n:m table name is incorrect, most probably, there's no n:m table,
+                //i.e. lhsTable and rhsTable are connected via simple foreign key
+                nmTableExist = false;
+            }
 
             using (SqlConnection conn = new SqlConnection(connString))
             {
@@ -163,21 +175,49 @@ namespace SPARQLtoSQL
                     if (colName == null)
                         throw new ArgumentNullException("Column name cannot be null, when object is specified!");
 
-                    cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                    if (nmTableExist)
+                    {
+                        cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
                                                 [{lhsTableName}].[{lhsPK}] AS lhsPK
                                                    FROM [{lhsTableName}]
                                                    INNER JOIN [{nmTableName}] ON [{lhsTableName}].[{lhsPK}] = [{nmTableName}].[{nmFK_lhsPK}]
                                                    INNER JOIN [{rhsTableName}] ON [{rhsTableName}].[{rhsPK}] = [{nmTableName}].[{nmFK_rhsPK}]
                                         WHERE [{rhsTableName}].[{colName}]={obj}";
-                    //colName == predicate
+                        //colName == predicate
+                    }
+                    else
+                    {
+                        //join without n:m table
+                        //lhsTable - table with foreign key
+                        string lhsFK = GetFKReferencingPKTable(this.GetDBName(), rhsTableName, lhsTableName);
+
+                        cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                                                [{lhsTableName}].[{lhsPK}] AS lhsPK
+                                                   FROM [{lhsTableName}]
+                                                   INNER JOIN [{rhsTableName}] ON [{lhsTableName}].[{lhsFK}] = [{rhsTableName}].[{rhsPK}]
+                                        WHERE [{rhsTableName}].[{colName}]={obj}";
+                    }
                 }
                 else
                 {
-                    cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                    if (nmTableExist)
+                    {
+                        cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
                                                 [{lhsTableName}].[{lhsPK}] AS lhsPK
                                                    FROM [{lhsTableName}]
                                                    INNER JOIN [{nmTableName}] ON [{lhsTableName}].[{lhsPK}] = [{nmTableName}].[{nmFK_lhsPK}]
                                                    INNER JOIN [{rhsTableName}] ON [{rhsTableName}].[{rhsPK}] = [{nmTableName}].[{nmFK_rhsPK}]";
+                    }
+                    else
+                    {
+                        //join without n:m table
+                        //lhsTable - table with foreign key
+                        string lhsFK = GetFKReferencingPKTable(this.GetDBName(), rhsTableName, lhsTableName);
+                        cmd.CommandText = $@"SELECT [{rhsTableName}].[{rhsPK}] AS rhsPK,
+                                                [{lhsTableName}].[{lhsPK}] AS lhsPK
+                                                   FROM [{lhsTableName}]
+                                                   INNER JOIN [{rhsTableName}] ON [{lhsTableName}].[{lhsFK}] = [{rhsTableName}].[{rhsPK}]";
+                    }
                 }
                 conn.Open();
                 SqlDataReader reader = cmd.ExecuteReader();
@@ -193,9 +233,9 @@ namespace SPARQLtoSQL
                     object o2 = reader[1];
                     RawTriple triple = new RawTriple
                     {
-                        Subj = $"{prefixURI}{dbName}/{lhsTableName}/{lhsPK}.{(reader["lhsPK"] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
-                        Pred = $"{prefixURI}{dbName}/{lhsTableName}#{nmTableName}",
-                        Obj = $"{prefixURI}{dbName}/{rhsTableName}/{rhsPK}.{(reader["rhsPK"] ?? counter)}"
+                        Subj = $"{prefixURI}/{lhsTableName}/{lhsPK}.{(reader["lhsPK"] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                        Pred = $"{prefixURI}/{lhsTableName}#{nmTableName}",
+                        Obj = $"{prefixURI}/{rhsTableName}/{rhsPK}.{(reader["rhsPK"] ?? counter)}"
                     };
                     triples.Add(triple);
                 }
@@ -232,8 +272,8 @@ namespace SPARQLtoSQL
                     counter++;
                     RawTriple triple = new RawTriple
                     {
-                        Subj = $"{prefixURI}{dbName}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
-                        Pred = $"{prefixURI}{dbName}/{tableName}#{columnName}",
+                        Subj = $"{prefixURI}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                        Pred = $"{prefixURI}/{tableName}#{columnName}",
                         Obj = obj ?? reader[columnName].ToString()
                     };
                     ////////////////////////
@@ -252,12 +292,12 @@ namespace SPARQLtoSQL
                     {
                         foreach(string columnURI in IFPs)
                         {
-                            if (columnURI.Contains($"{prefixURI}{dbName}/{tableName}"))   //IFP columnURI should correspond to current entity, not the FEDERATED one, for example
+                            if (columnURI.Contains($"{prefixURI}/{tableName}"))   //IFP columnURI should correspond to current entity, not the FEDERATED one, for example
                             {
                                 string ifpColumnName = columnURI.Replace($"{prefixURI}{dbName}/{tableName}#", "");
                                 RawTriple tripleIFP = new RawTriple
                                 {
-                                    Subj = $"{prefixURI}{dbName}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
+                                    Subj = $"{prefixURI}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),
                                     Pred = columnURI,
                                     Obj = obj ?? reader[ifpColumnName].ToString()
                                 };
@@ -335,8 +375,8 @@ namespace SPARQLtoSQL
                             {
                                 RawTriple triple = new RawTriple
                                 {
-                                    Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
-                                    Pred = $"{prefixURI}{dbName}/{tableName}#{reader.GetName(i)}",
+                                    Subj = $"{prefixURI}/{tableName}/{individualColName}.{individualColValue}",
+                                    Pred = $"{prefixURI}/{tableName}#{reader.GetName(i)}",
                                     Obj = obj
                                 };
                                 triples.Add(triple);
@@ -362,8 +402,8 @@ namespace SPARQLtoSQL
                     {
                         RawTriple triple = new RawTriple
                         {
-                            Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
-                            Pred = $"{prefixURI}{dbName}/{tableName}#{predicateColName}",
+                            Subj = $"{prefixURI}/{tableName}/{individualColName}.{individualColValue}",
+                            Pred = $"{prefixURI}/{tableName}#{predicateColName}",
                             Obj = reader[predicateColName].ToString()
                         };
                         triples.Add(triple);      
@@ -390,8 +430,8 @@ namespace SPARQLtoSQL
                                 continue;
                             RawTriple triple = new RawTriple
                             {
-                                Subj = $"{prefixURI}{dbName}/{tableName}/{individualColName}.{individualColValue}",
-                                Pred = $"{prefixURI}{dbName}/{tableName}#{reader.GetName(i)}",
+                                Subj = $"{prefixURI}/{tableName}/{individualColName}.{individualColValue}",
+                                Pred = $"{prefixURI}/{tableName}#{reader.GetName(i)}",
                                 Obj = objStr
                             };
                             triples.Add(triple);

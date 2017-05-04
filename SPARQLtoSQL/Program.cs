@@ -44,12 +44,12 @@ namespace SPARQLtoSQL
             //Console.WriteLine(mappings[":hasName"][0].IsMatch("?x", ":hasName", ":Neoplasm"));
 
             dbURIs = new Dictionary<string, string>();
-            dbURIs.Add("http://www.example.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True");
-            dbURIs.Add("http://www.example.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
+            dbURIs.Add("http://www.example.org/KMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMSv1; Integrated Security = True");
+            dbURIs.Add("http://www.example.org/LMS/", @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMSv1; Integrated Security = True");
 
             DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
-                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMS; Integrated Security = True",
-                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMS; Integrated Security = True");
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMSv1; Integrated Security = True",
+                @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMSv1; Integrated Security = True");
             CustomQueryLMS_KMS();
             //string connString = @"Data Source=ASUS\SQLEXPRESS;Initial Catalog=KMS;Integrated Security=True";
         }
@@ -137,17 +137,36 @@ namespace SPARQLtoSQL
                             {
                                 //query with new predicates and transform the results to FEDERATED schema syntax
                                 SparqlParameterizedString queryString = new SparqlParameterizedString();
+                                SparqlResultSet resultSet = null;
                                 if (IsLiteralValue(triple.Object.ToString()))
                                 {
                                     queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.ToString()} }} ";
+                                    resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
                                 }
                                 else
                                 {
-                                    //if object is a URI (i.e. ?subj <fedPred> <fedObj>) which corresponds to federated schema
-                                    //we should resolve underlying equivalent OBJECT subproperties for <fedObj> 
-                                    throw new NotImplementedException();
+                                    if (triple.Object.VariableName == null) //object is not a pattern
+                                    {
+                                        //if object is a URI (i.e. ?subj <fedPred> <fedObj>) which corresponds to federated schema
+                                        //we should resolve underlying equivalent OBJECT subproperties for <fedPred> 
+                                        string objectUri_srcSchema = null;
+                                        try
+                                        {
+                                            objectUri_srcSchema = ConvertFederatedIndividualUriToSource(g, triple.Object.ToString(), resultPredicate[0].ToString());
+                                        }
+                                        catch (InvalidOperationException)
+                                        {
+                                            continue;
+                                        }
+                                        queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> <{objectUri_srcSchema}> }} ";
+                                        resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
+                                    }
+                                    else //object is a pattern
+                                    {
+                                        queryString.CommandText = $"SELECT * WHERE {{ ?subj <{resultPredicate[0].ToString()}> {triple.Object.VariableName} }} ";
+                                        resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
+                                    }
                                 }
-                                SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd);
 
                                 string federatedStem = triple.Predicate.ToString().Trim('<', '>').Split('#')[0]; //left part (before '#') -> /FEDERATED/table name
                                 //federatedStem += '/'; // /FEDERATED/table name/
@@ -161,7 +180,12 @@ namespace SPARQLtoSQL
                                     string objStr;
                                     if (triple.Object.VariableName == null) //not a pattern
                                     {
-                                        objStr = triple.Object.ToString().Trim('"');
+                                        if (IsLiteralValue(triple.Object.ToString()))
+                                        {
+                                            objStr = triple.Object.ToString().Trim('"');
+                                        }
+                                        else
+                                            objStr = triple.Object.ToString().Trim('<', '>');
                                     }
                                     else //object was a pattern ?object in sparql query
                                     {
@@ -200,25 +224,70 @@ namespace SPARQLtoSQL
                         }
                         if(triple.Object.VariableName == null) //is not a pattern
                         {
-                            if(!IsLiteralValue(triple.Object.ToString()))
+                            if (triple.Subject.VariableName != null) //?subject is a pattern
                             {
-                                // ?subject <predicate> <object>
-                                //<predicate> must refer to an OBJECT PROPERTY!!! otherwise it's a logical error!
+                                #region <predicate>
+                                if (triple.Predicate.VariableName == null) //is not a pattern
+                                {
+                                    if (!IsLiteralValue(triple.Object.ToString()))
+                                    {
+                                        // ?subject <predicate> <object> [FEDERATED SCHEMA]
+                                        //<predicate> must refer to an OBJECT PROPERTY!!! otherwise it's a logical error!
 
-                                //List<RawTriple> rawTriples = null;
-                                //rawTriples = ResolveTriplesForPredObj_ObjectProperty(dbLoaderFactory, ontoGraph, triple, predConnString);
+                                        //Этот случай уже рассматривался выше - do nothing
+                                    }
+                                    else
+                                    {
+                                        //object is a literal value
+                                        // ?subject <predicate> "object"
 
-                                //foreach (var rawTriple in rawTriples)
-                                //{
-                                //    AddRawTripleToList(g, triplesToAdd, rawTriple);
-                                //}
-                                //throw new InvalidOperationException("Object variable in tripple, referring to FEDERATED schema should be a PATTERN!");
-                                throw new NotImplementedException();
+                                        //Этот случай уже рассматривался выше - do nothing
+                                    }
+                                }
+                                #endregion
+                                else //predicate is a pattern
+                                {
+                                    //TODO: resolve predicates and recur, so that <predicate><object> would be triggered
+                                    if (!IsLiteralValue(triple.Object.ToString()))
+                                    {
+                                        //?subject ?predicate <object>
+                                        //?subject ?predicate <http://www.example.org/FEDERATED/User/KMS.Id_User.95>
+                                        //predicates - are federated properties, which range is http://www.example.org/FEDERATED/User
+                                        OntologyGraph ograph = new OntologyGraph();
+                                        ograph.Merge(g);
+                                        Dictionary<string, string> objectInfo = GetDatabaseInfoForIndividualURI(triple.Object.ToString().Trim('>', '<'));
+                                        string tableUri = $"{objectInfo["prefix"]}{objectInfo["dbName"]}/{objectInfo["tableName"]}"; //http://www.example.org/FEDERATED/User
+                                        OntologyProperty oprop = new OntologyProperty(new Uri(tableUri), ograph);
+
+                                        //ograph.GetTriplesWithPredicateObject()
+                                        OntologyProperty classOfObjProperties = ograph.CreateOntologyProperty(ograph.CreateUriNode("owl:ObjectProperty"));
+
+                                        var federatedPropsWithRange = ograph.GetTriplesWithPredicateObject(
+                                                                                    ograph.CreateUriNode("rdfs:range"), 
+                                                                                    ograph.CreateUriNode(new Uri(tableUri))
+                                                                      ).ToList();
+
+                                        foreach(var prop in federatedPropsWithRange)
+                                        {
+                                            string federatedPredicate = prop.Subject.ToString().Trim('<', '>'); //http://www.example.org/FEDERATED/Admin#Id_User
+                                            SparqlParameterizedString queryString = new SparqlParameterizedString();
+                                            queryString.CommandText = $"SELECT * WHERE {{ ?subj <{federatedPredicate}> {triple.Object.ToString()} }}"; //SELECT * WHERE { ?subj <http://www.example.org/FEDERATED/Admin#Id_User> <http://www.example.org/FEDERATED/User/KMS.Id_User.95> }
+                                            SparqlResultSet resultSet = QuerySparqlFromDB(g, queryString, dbURIs, triplesToAdd); //we supply current list of triples to add, so we do not need the result set
+                                        }
+                                        //throw new NotImplementedException();
+                                    }
+                                    else
+                                    {
+                                        //?subject ?predicate "object"
+                                        throw new NotImplementedException();
+                                    }
+                                }
                             }
-                            else
+                            else    //<subject> is not a pattern
                             {
-                                //object is a literal value
-                                // ?subject <predicate> "object"
+                                //maybe, it would be logically incorrect to implement this
+                                //federated IDs are generated at runtime, so if users would store them for future queries
+                                //in next versions of software, these IDs could become obsolete and not supported
                                 throw new NotImplementedException();
                             }
 
@@ -261,7 +330,7 @@ namespace SPARQLtoSQL
                             tableName: dbInfo["tableName"],
                             individualColName: dbInfo["columnName"],
                             individualColValue:dbInfo["columnValue"],
-                            prefixURI: dbInfo["prefix"],
+                            prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                             predicateColName: triple.Predicate.VariableName==null ? GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString())["columnName"] : null,
                             obj: triple.Object.VariableName==null ? triple.Object.ToString().Trim('>', '<') : null
                         );
@@ -290,7 +359,7 @@ namespace SPARQLtoSQL
                                 List<RawTriple> rawTriples = dbLoader.GetTriplesForPredicateObject(
                                     tableName: dbInfo["tableName"],
                                     columnName: dbInfo["columnName"],
-                                    prefixURI: dbInfo["prefix"],
+                                    prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                                     obj: triple.Object.ToString(),
                                     IFPs: GetIFPsFromOntology(g).ToList());
 
@@ -347,14 +416,14 @@ namespace SPARQLtoSQL
                                     lhsTableName: dbInfo["tableName"],
                                     nmTableName: dbInfo["columnName"], //it's mapped as a column name
                                     rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
-                                    prefixURI: dbInfo["prefix"],
+                                    prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                                     obj: null);
                             }
                             else {  //a dataType property
                                 rawTriples = dbLoader.GetTriplesForPredicateObject(
                                     tableName: dbInfo["tableName"],
                                     columnName: dbInfo["columnName"],
-                                    prefixURI: dbInfo["prefix"],
+                                    prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                                     obj: null,
                                     IFPs: GetIFPsFromOntology(g).ToList());
                             }
@@ -398,6 +467,71 @@ namespace SPARQLtoSQL
             }
         }
 
+        /// <summary>
+        /// Converts federated uri of individual to source schema uri, based on source predicateURI
+        /// </summary>
+        /// <param name="federatedIndividualUri">URI of individual in federated schema terms</param>
+        /// <param name="predicateUriSource">Predicate in source schema terms</param>
+        /// <returns>Source schema URI of individual</returns>
+        private static string ConvertFederatedIndividualUriToSource(IGraph g, string federatedIndividualUri, string predicateUriSource)
+        {
+            federatedIndividualUri = federatedIndividualUri.Trim('<', '>');
+            predicateUriSource = predicateUriSource.Trim('>', '<');
+            //http://www.example.org/KMS/Admin#Id_User - predicateUriSource
+            //"http://www.example.org/FEDERATED/Admin/KMS.Id_User.95" - federatedIndividualUri
+            //syntax of federatedIndividualUri: prefix/XXXXX/TableName/KMS.ID.1.LMS.ID.5
+
+            Dictionary<string, string> dbInfo = GetPrefixDbNameTableNameColNameFromURI(predicateUriSource);
+            string schemaReferredByPredicate = dbInfo["dbName"]; //KMS
+                                                                 //resolve from federatedIndividualUri PK value for appropriate schema, i.e. in this example ID for KMS = 1 [KMS.ID.1]
+                                                                 //if EXCEPTION ArgumentOutOfRange -> federatedUri cannot be converted to source URI with this predicateUriSource
+            string srcSchemaPkId = null;
+            try {
+                srcSchemaPkId = federatedIndividualUri.Substring(federatedIndividualUri.IndexOf(schemaReferredByPredicate));
+            }catch(ArgumentOutOfRangeException)
+            {
+                throw new InvalidOperationException($"federatedUri={federatedIndividualUri} cannot be converted to source URI with this predicateUriSource={predicateUriSource}");
+            }
+            Regex r = new Regex(@"(\w+)\.(\w+\.\w+)");    //match DbName, PkName, PkValue, i.e. DbName = KMS, PkName = ID, PkValue = 1 (KMS.ID.1)
+            if(!r.IsMatch(srcSchemaPkId))
+            {
+                throw new ArgumentOutOfRangeException($"federatedIndividualUri={federatedIndividualUri} is invalid individual URI!");
+            }
+            Match m = r.Match(srcSchemaPkId);
+            srcSchemaPkId = m.Groups[2].ToString();
+
+            //now resolve table name of object. It equals to range of predicate, which corresponds to referred schema (i.e. KMS)
+            OntologyGraph ograph = new OntologyGraph();
+            ograph.Merge(g);
+
+            OntologyProperty oprop = new OntologyProperty(new Uri(predicateUriSource), ograph);
+            IEnumerable<OntologyClass> ranges = oprop.Ranges;
+            string tableUri = (from range in ranges where range.ToString().Contains($"{dbInfo["prefix"] + dbInfo["dbName"]}") select range.ToString()).FirstOrDefault();
+            if(tableUri== null)
+            {
+                throw new InvalidOperationException($"federatedUri={federatedIndividualUri} cannot be converted to source URI with this predicateUriSource={predicateUriSource}");
+            }
+
+            string result = $"{tableUri}/{srcSchemaPkId}";
+            return result;
+        }
+
+        private static List<string> GetUnderlyingSourceSchemaPropertyURIs(IGraph g, string federatedPropertyURI)
+        {
+            OntologyGraph ograph = new OntologyGraph();
+            ograph.Merge(g);
+
+            OntologyProperty oprop = new OntologyProperty(new Uri(federatedPropertyURI), ograph);
+            IEnumerable<OntologyProperty> subProps = oprop.SubProperties;
+
+            List<string> result = new List<string>();
+            foreach(OntologyProperty prop in subProps)
+            {
+                result.Add(prop.ToString().Trim('<', '>'));
+            }
+            return result;
+        }
+
         private static List<RawTriple> ResolveTriplesForPredObj_ObjectProperty(DBLoaderFactory dbLoaderFactory, OntologyGraph ontoGraph, 
                                                                                TriplePattern triple, string predConnString)
         {
@@ -425,7 +559,7 @@ namespace SPARQLtoSQL
                         lhsTableName: dbInfo["tableName"],
                         nmTableName: dbInfo["columnName"], //it's mapped as a column name
                         rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
-                        prefixURI: dbInfo["prefix"],
+                        prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                         colName: colName,
                         obj: colValue);
                 }
@@ -434,7 +568,7 @@ namespace SPARQLtoSQL
                         lhsTableName: dbInfo["tableName"],
                         nmTableName: dbInfo["columnName"], //it's mapped as a column name
                         rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
-                        prefixURI: dbInfo["prefix"],
+                        prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
                         obj: null);
                 }
             }
@@ -582,7 +716,7 @@ namespace SPARQLtoSQL
         {
             IGraph g = new VDS.RDF.Graph();                 //Load triples from file OWL
             //g.LoadFromFile("combined.owl");
-            g.LoadFromFile("kms-lms_merged.owl");
+            g.LoadFromFile("kms-lms_merged_v2.owl");
             g.BaseUri = null; //!
 
             //INode subj = g.CreateUriNode(new Uri("http://www.semanticweb.org/KMS/User/1"));
@@ -636,10 +770,20 @@ namespace SPARQLtoSQL
             //                                    ?kunde <http://www.semanticweb.org/FEDERATED/User#LMS.ID> ?lmdID.
             //                                    ?kunde <http://www.semanticweb.org/FEDERATED/User#KMS.ID> ?kmsID.}";
 
+            //TODO  TODO    TODO
+            //queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+            //                            SELECT *
+            //                            WHERE { ?u <http://www.example.org/FEDERATED/User#User_Group> <http://www.example.org/FEDERATED/Group/ID.1>.
+            //                                    }";
+
             queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
                                         SELECT *
                                         WHERE { ?u <http://www.example.org/KMS/User#User_Group> <http://www.example.org/KMS/Group/ID.1>.
                                                 <http://www.example.org/KMS/Group/ID.1> ?pred ?obj}";
+
+            queryString.CommandText = @"PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                                        SELECT *
+                                        WHERE { ?subj ?pred <http://www.example.org/FEDERATED/User/KMS.Id_User.95>.}";
 
             SparqlQueryParser parser = new SparqlQueryParser();
             //SparqlQuery query = parser.ParseFromString(queryString.ToString());

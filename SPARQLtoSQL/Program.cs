@@ -279,7 +279,13 @@ namespace SPARQLtoSQL
                                     else
                                     {
                                         //?subject ?predicate "object"
-                                        throw new NotImplementedException();
+                                        //this particular query cannot happen for FEDERATED query, because there's no sign that this is a 
+                                        //federated query; neither ?subject nor ?predicate references federated query
+                                        //THIS METHOD COULD BE REALIZED, BUT IT IT SENSLESS in terms of perfomance,
+                                        //because we than should literaly query ALL database records to find that particular "object"
+                                        throw new NotImplementedException(@"This particular query cannot happen for FEDERATED query, 
+                                                                            because there's no sign that this is a federated query; 
+                                                                            neither ?subject nor ?predicate references federated query.");
                                     }
                                 }
                             }

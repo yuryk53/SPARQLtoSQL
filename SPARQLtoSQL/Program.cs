@@ -28,7 +28,7 @@ namespace SPARQLtoSQL
 
         static void Main(string[] args)
         {
-            mapping.ReadMappings("mapping.tmap");
+            //mapping.ReadMappings("mapping.tmap");
 
 
             //ProjectNode p = new ProjectNode(null, new List<string>(new string[] { "x" }));
@@ -50,8 +50,46 @@ namespace SPARQLtoSQL
             DBLoaderFactory.RegisterDBLoaders(typeof(MSSQLdBLoader),
                 @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMSv1; Integrated Security = True",
                 @"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMSv1; Integrated Security = True");
-            CustomQueryLMS_KMS();
-            //string connString = @"Data Source=ASUS\SQLEXPRESS;Initial Catalog=KMS;Integrated Security=True";
+            //CustomQueryLMS_KMS();
+            QueryWithQuantumQueryProcessor();
+        }
+
+        static void QueryWithQuantumQueryProcessor()
+        {
+            QuantumQueryProcessor qProcessor = new QuantumQueryProcessor("kms-lms_merged_v2.owl");
+
+            qProcessor.AddDBInfo(@"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMSv1; Integrated Security = True",
+                                  "http://www.example.org/KMS/", typeof(MSSQLdBLoader));
+            qProcessor.AddDBInfo(@"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMSv1; Integrated Security = True",
+                                  "http://www.example.org/LMS/", typeof(MSSQLdBLoader));
+
+            SparqlResultSet results = 
+                qProcessor.ExecuteSparql(@" SELECT *
+                                        WHERE { ?subj ?pred <http://www.example.org/FEDERATED/User/KMS.Id_User.95>.}");
+
+            Dictionary<string, List<string>> resultDict = qProcessor.ConvertSparqlResultSetToDict(results);
+
+            //print out the results table
+            //print header
+            Console.WriteLine($"\n{String.Concat(Enumerable.Repeat("-", 124))}");
+            foreach (var key in resultDict.Keys)
+            {
+                Console.Write("{0,-60} |", key);
+            }
+            Console.WriteLine($"\n{String.Concat(Enumerable.Repeat("-", 124))}");
+            //print results
+            //sizes of values' lists should be the same for each resultDict[key]
+            int size = resultDict.First().Value.Count;
+            for (int i = 0; i < size; i++)
+            {
+                foreach (var key in resultDict.Keys)
+                {
+                    Console.Write("{0,-60} |", resultDict[key][i]);
+                }
+                Console.WriteLine();
+            }
+            
+
         }
 
         static string GetConnStringFromURI(Dictionary<string, string> dbURIs, string uri)
@@ -815,7 +853,7 @@ namespace SPARQLtoSQL
             //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
             //SparqlResultSet results = processor.ProcessQuery(query) as SparqlResultSet;
 
-            ISparqlQueryProcessor processor = new QuantumQueryProcessor(store);//new LeviathanQueryProcessor(store);   //process query
+            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
             var results = processor.ProcessQuery(query) as SparqlResultSet;
 
 
@@ -823,7 +861,7 @@ namespace SPARQLtoSQL
             if (results is SparqlResultSet)
             {
                 SparqlResultSet rset = (SparqlResultSet)results;
-                
+
                 foreach (SparqlResult result in rset)
                 {
                     Console.WriteLine(result.ToString());

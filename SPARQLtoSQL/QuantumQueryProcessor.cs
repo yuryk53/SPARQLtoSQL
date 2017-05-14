@@ -18,7 +18,7 @@ namespace SPARQLtoSQL
     public class QuantumQueryProcessor
     {
         Dictionary<string,string> dbURIs = new Dictionary<string, string>();
-        string OntologyFileName { get; set; }
+        public string OntologyFileName { get; private set; }
 
         public QuantumQueryProcessor(string ontologyFileName)
         {

@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 
 namespace SPARQLtoSQL
 {
-    interface IRecordsAmbiguityResolver
+    public interface IRecordsAmbiguityResolver
     {
         /// <summary>
         /// Resolves ambiguity between two strings with one semantic meaning

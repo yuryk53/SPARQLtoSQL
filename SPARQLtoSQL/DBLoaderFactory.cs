@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace SPARQLtoSQL
 {
-    public class DBLoaderFactory
+    public class DBLoaderFactory : IDBLoaderFactory
     {
         static Dictionary<string, Type> dbConStringLoaderDict = new Dictionary<string, Type>();
 

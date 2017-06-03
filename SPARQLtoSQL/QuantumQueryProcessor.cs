@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Data;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -406,12 +407,26 @@ namespace SPARQLtoSQL
                                 string propRange = oprop.Ranges.First().Resource.ToString();
                                 string rhsTableName = propRange.Substring(propRange.LastIndexOf('/') + 1);
 
-                                rawTriples = dbLoader.GetTriplesForPredicateObject_ObjProperty(
-                                    lhsTableName: dbInfo["tableName"],
-                                    nmTableName: dbInfo["columnName"], //it's mapped as a column name
-                                    rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
-                                    prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
-                                    obj: null);
+                                if (dbLoader.GetTableNames().Contains(rhsTableName))
+                                {
+                                    rawTriples = dbLoader.GetTriplesForPredicateObject_ObjProperty(
+                                        lhsTableName: dbInfo["tableName"],
+                                        nmTableName: dbInfo["columnName"], //it's mapped as a column name
+                                        rhsTableName: rhsTableName,   //is inferred from rdfs:range property of object property in ontology
+                                        prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
+                                        obj: null);
+                                }
+                                else //rhsTableName refers not to table but to foaf:email, for example
+                                {
+                                    //try DataTypeProperty method
+                                    rawTriples = dbLoader.GetTriplesForPredicateObject(
+                                        tableName: dbInfo["tableName"],
+                                        columnName: dbInfo["columnName"],
+                                        prefixURI: dbInfo["prefix"] + dbInfo["dbName"],
+                                        obj: null,
+                                        IFPs: GetIFPsFromOntology(g).ToList());
+                                }
+                                
                             }
                             else {  //a dataType property
                                 rawTriples = dbLoader.GetTriplesForPredicateObject(
@@ -740,6 +755,34 @@ namespace SPARQLtoSQL
                 }
             }
             return dict;
+        }
+
+        public DataTable ConvertSparqlResultSetToDataTable(SparqlResultSet rSet)
+        {
+            DataTable dt = new DataTable();
+            foreach (var variable in rSet.Variables) //add headers
+            {
+                DataColumn dc = new DataColumn(variable.ToString());
+                dt.Columns.Add(dc);
+            }
+            foreach (SparqlResult result in rSet)
+            {
+                DataRow dr = dt.NewRow();
+                foreach (var variable in rSet.Variables)
+                {
+                    INode val = result.Value(variable);
+                    if (val != null)
+                    {
+                        dr[variable.ToString()] = val.ToString();
+                    }
+                    else
+                    {
+                        dr[variable.ToString()] = string.Empty;
+                    }
+                }
+                dt.Rows.Add(dr);
+            }
+            return dt;
         }
 
         public SparqlResultSet ExecuteSparql(string queryString)

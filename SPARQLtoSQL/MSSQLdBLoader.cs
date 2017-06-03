@@ -454,6 +454,9 @@ namespace SPARQLtoSQL
 
             Table tbl = db.Tables[tableName];
 
+            if (tbl == null)
+                throw new InvalidArgumentException($"Invalid table name '{tableName}'");
+
             List<string> pkList = new List<string>();
             foreach (Column col in tbl.Columns)
             {

@@ -17,6 +17,7 @@ using VDS.RDF.Storage;
 using VDS.RDF.Query.Algebra;
 using VDS.RDF.Query.Patterns;
 using VDS.RDF.Ontology;
+using System.Data;
 
 namespace SPARQLtoSQL
 {
@@ -56,16 +57,23 @@ namespace SPARQLtoSQL
 
         static void QueryWithQuantumQueryProcessor()
         {
-            QuantumQueryProcessor qProcessor = new QuantumQueryProcessor("kms-lms_merged_v2.owl");
+            QuantumQueryProcessor qProcessor = new QuantumQueryProcessor(@"D:\Stud\4 course\II semester\!Diploma work\Documentation\Test Case\Merged_KMSv1_LMSv1.owl");//new QuantumQueryProcessor("kms-lms_merged_v2.owl");
 
             qProcessor.AddDBInfo(@"Data Source = ASUS\SQLEXPRESS; Initial Catalog = KMSv1; Integrated Security = True",
                                   "http://www.example.org/KMS/", typeof(MSSQLdBLoader));
             qProcessor.AddDBInfo(@"Data Source = ASUS\SQLEXPRESS; Initial Catalog = LMSv1; Integrated Security = True",
                                   "http://www.example.org/LMS/", typeof(MSSQLdBLoader));
 
-            SparqlResultSet results = 
+            //SparqlResultSet results = 
+            //    qProcessor.ExecuteSparql(@" SELECT *
+            //                            WHERE { ?subj ?pred <http://www.example.org/FEDERATED/User/KMS.Id_User.95>.} ORDER BY ?subj");
+
+            SparqlResultSet results =
                 qProcessor.ExecuteSparql(@" SELECT *
-                                        WHERE { ?subj ?pred <http://www.example.org/FEDERATED/User/KMS.Id_User.95>.}");
+                                            WHERE 
+                                            {
+                                                ?user <http://www.example.org/FEDERATED/User#email> ?email.
+                                            }");
 
             Dictionary<string, List<string>> resultDict = qProcessor.ConvertSparqlResultSetToDict(results);
 
@@ -88,8 +96,10 @@ namespace SPARQLtoSQL
                 }
                 Console.WriteLine();
             }
-            
 
+            DataTable resultDt = qProcessor.ConvertSparqlResultSetToDataTable(results);
+
+            Console.WriteLine();
         }
 
         static string GetConnStringFromURI(Dictionary<string, string> dbURIs, string uri)

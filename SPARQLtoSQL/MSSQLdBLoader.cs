@@ -294,7 +294,7 @@ namespace SPARQLtoSQL
                         {
                             if (columnURI.Contains($"{prefixURI}/{tableName}"))   //IFP columnURI should correspond to current entity, not the FEDERATED one, for example
                             {
-                                string ifpColumnName = columnURI.Replace($"{prefixURI}{dbName}/{tableName}#", "");
+                                string ifpColumnName = columnURI.Replace($"{prefixURI}/{tableName}#", "");
                                 RawTriple tripleIFP = new RawTriple
                                 {
                                     Subj = $"{prefixURI}/{tableName}/{pk}.{(reader[pk] ?? counter)}", // dbName + tableName + (reader["ID"] ?? ++counter),

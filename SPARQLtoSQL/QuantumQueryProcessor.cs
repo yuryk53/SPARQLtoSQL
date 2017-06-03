@@ -647,23 +647,30 @@ namespace SPARQLtoSQL
             store.Add(g);
 
             //get list of Inverse Functional Properties from ontology
-            SparqlParameterizedString queryString = new SparqlParameterizedString();
+            //SparqlParameterizedString queryString = new SparqlParameterizedString();
 
-            queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
-            queryString.Namespaces.AddNamespace("rdf", new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#"));
-            queryString.CommandText = @"SELECT ?property WHERE {
-                                               ?property <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <owl:InverseFunctionalProperty>. }";
+            //queryString.Namespaces.AddNamespace("owl", new Uri("http://www.w3.org/2002/07/owl#"));
+            //queryString.Namespaces.AddNamespace("rdf", new Uri("http://www.w3.org/1999/02/22-rdf-syntax-ns#"));
+            //queryString.CommandText = @"SELECT ?property WHERE {
+            //                                   ?property <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <owl:InverseFunctionalProperty>. }";
 
-            SparqlQueryParser parser = new SparqlQueryParser();
-            SparqlQuery query = parser.ParseFromString(queryString.ToString());
 
-            ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
-            var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            //SparqlQueryParser parser = new SparqlQueryParser();
+            //SparqlQuery query = parser.ParseFromString(queryString.ToString());
+
+            //ISparqlQueryProcessor processor = new LeviathanQueryProcessor(store);   //process query
+            //var results = processor.ProcessQuery(query) as SparqlResultSet;
+
+            OntologyGraph ograph = new OntologyGraph();
+            ograph.Merge(g);
+            List<Triple> ifpTriples = ograph.GetTriplesWithPredicateObject(ograph.CreateUriNode("rdf:type"),
+                ograph.CreateUriNode("owl:InverseFunctionalProperty")).ToList();
 
             HashSet<string> IFPs = new HashSet<string>();
-            foreach (SparqlResult result in results)
+            foreach (Triple result in ifpTriples)
             {
-                IFPs.Add(result[0].ToString());
+                IFPs.Add(result.Subject.ToString());
             }
             return IFPs;
         }

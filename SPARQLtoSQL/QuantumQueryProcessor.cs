@@ -750,7 +750,8 @@ namespace SPARQLtoSQL
             {
                 foreach (var variable in dict.Keys)
                 {
-                    INode val = result.Value(variable);
+                    INode val;// = result.Value(variable);
+                    result.TryGetValue(variable, out val);
                     if (val != null)
                     {
                         dict[variable].Add(val.ToString());
@@ -777,7 +778,8 @@ namespace SPARQLtoSQL
                 DataRow dr = dt.NewRow();
                 foreach (var variable in rSet.Variables)
                 {
-                    INode val = result.Value(variable);
+                    INode val;// = result.Value(variable);
+                    result.TryGetValue(variable, out val);
                     if (val != null)
                     {
                         dr[variable.ToString()] = val.ToString();
@@ -933,6 +935,9 @@ namespace SPARQLtoSQL
 
                 foreach (var key in matchIFPDict.Keys)
                 {
+                    if (matchIFPDict[key].Count < 2)
+                        continue;
+
                     Regex r = new Regex(@"((.+)/(.+)/(.+))/(.+)$");
 
                     string classUri = r.Match(matchIFPDict[key][0]).Groups[1].Value;
@@ -977,6 +982,9 @@ namespace SPARQLtoSQL
                     }
                 }
 
+                List<string> federatedSubjectsAdded = new List<string>();
+                OntologyGraph ograph = new OntologyGraph();
+                ograph.Merge(g);
                 foreach (Triple t in triplesToAdd.ToList())
                 {
                     string subjStr = t.Subject.ToString(); //probably, unique ID
@@ -987,6 +995,9 @@ namespace SPARQLtoSQL
                     string objStr = unifiedIDs.ContainsKey(t.Object.ToString()) ? unifiedIDs[t.Object.ToString()] : t.Object.ToString();
 
 
+                    List<Triple> federatedPredicateTriples = ograph.GetTriplesWithPredicateObject(ograph.CreateUriNode("owl:equivalentProperty"),
+                        ograph.CreateUriNode(new Uri(t.Predicate.ToString()))).ToList();
+
                     INode subj = g.CreateUriNode(new Uri(subjStr));
                     INode obj; // = g.CreateLiteralNode($"{rawTriple.Obj}");
                     if (IsLiteralValue(objStr))
@@ -994,7 +1005,9 @@ namespace SPARQLtoSQL
                         obj = g.CreateLiteralNode(objStr);
                     }
                     else obj = g.CreateUriNode(new Uri(objStr));
+                    //g.Assert(subj, t.Predicate, obj);
                     g.Assert(subj, t.Predicate, obj);
+                    federatedSubjectsAdded.Add(subjStr);
 
                     triplesToAdd.Remove(t);
                 }
@@ -1002,7 +1015,10 @@ namespace SPARQLtoSQL
                 //add the remaining ones
                 foreach (Triple t in triplesToAdd)
                 {
-                    g.Assert(t);
+                    if (!federatedSubjectsAdded.Contains(t.Subject.ToString(), new StringContainmentComparer()))
+                    {
+                        g.Assert(t);
+                    }
                 }
             }
             else
@@ -1012,6 +1028,19 @@ namespace SPARQLtoSQL
                 {
                     g.Assert(t);
                 }
+            }
+        }
+
+        private class StringContainmentComparer : IEqualityComparer<string>
+        {
+            public bool Equals(string x, string y)
+            {
+                return x.Contains(y);
+            }
+
+            public int GetHashCode(string obj)
+            {
+                return obj.GetHashCode();
             }
         }
 

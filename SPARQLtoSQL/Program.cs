@@ -72,7 +72,11 @@ namespace SPARQLtoSQL
                 qProcessor.ExecuteSparql(@" SELECT *
                                             WHERE 
                                             {
-                                                ?user <http://www.example.org/FEDERATED/User#email> ?email.
+                                               ?user <http://www.example.org/FEDERATED/User#email> ?email.
+                                               
+   
+   	                                            ?luser <http://www.example.org/LMS/User#email> ?email. 
+                                               
                                             }");
 
             Dictionary<string, List<string>> resultDict = qProcessor.ConvertSparqlResultSetToDict(results);

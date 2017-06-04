@@ -69,14 +69,11 @@ namespace SPARQLtoSQL
             //                            WHERE { ?subj ?pred <http://www.example.org/FEDERATED/User/KMS.Id_User.95>.} ORDER BY ?subj");
 
             SparqlResultSet results =
-                qProcessor.ExecuteSparql(@" SELECT *
+                qProcessor.ExecuteSparql(@"SELECT DISTINCT *
                                             WHERE 
                                             {
-                                               ?user <http://www.example.org/FEDERATED/User#email> ?email.
                                                
-   
-   	                                            ?luser <http://www.example.org/LMS/User#email> ?email. 
-                                               
+                                               ?sender <http://www.example.org/FEDERATED/User#email> ?sender_email
                                             }");
 
             Dictionary<string, List<string>> resultDict = qProcessor.ConvertSparqlResultSetToDict(results);

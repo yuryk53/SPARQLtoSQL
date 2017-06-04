@@ -202,7 +202,26 @@ namespace SPARQLtoSQL
                                             //objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
                                             if(superClass.Count>0)
                                             {
-                                                objStr = $"{superClass.First()}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                                //check the range of this predicate attribute, if it has IFPs, resolve name using IFPs
+                                                OntologyProperty oprop = new OntologyProperty(new Uri(predStr), g);
+                                                List<string> rangeIFPs = new List<string>();
+                                                foreach(var range in oprop.Ranges)
+                                                {
+                                                    foreach(var ifpProp in IFPs)
+                                                    {
+                                                        if(ifpProp.Contains(range.ToString()))
+                                                        {
+                                                            rangeIFPs.Add(ifpProp);
+                                                        }
+                                                    }
+                                                }
+                                                
+                                                //objStr = $"{superClass.First()}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                                objStr = GetFederatedIndividualNameUsingIFP(dbInfo, superClass.First(), rangeIFPs, dbLoaderFactory);
+                                                if(objStr== null)   //no federated was name resolved
+                                                {
+                                                    objStr = $"{superClass.First()}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                                }
                                             }
                                             else
                                             {
@@ -495,6 +514,77 @@ namespace SPARQLtoSQL
                     ResolveBGPsFromDB((algebra as IAbstractJoin).Lhs, g, dbURIs, dbLoaderFactory, triplesToAdd);
                     ResolveBGPsFromDB((algebra as IAbstractJoin).Rhs, g, dbURIs, dbLoaderFactory, triplesToAdd);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Converts source schema individual in dbInfoIndividual into FEDERATED INDIVIDUAL quering and merging IFP individuals
+        /// </summary>
+        /// <param name="dbInfoIndividual">dbInfo of individual from source schema</param>
+        /// <param name="ifpRanges">Ranges of src schema individual which have IFProperties</param>
+        /// <returns>FEDERATED INDIVIDUAL URI</returns>
+        private string GetFederatedIndividualNameUsingIFP(Dictionary<string,string> dbInfoIndividual, string federatedTableUri, List<string> ifpRanges, DBLoaderFactory dbLoaderFactory)
+        {
+            //string srcUri = GetConnStringFromURI(this.dbURIs, $"{dbInfoIndividual["prefix"]}{dbInfoIndividual["dbName"]}/{dbInfoIndividual["tableName"]}");
+            IDBLoader dbLoader;
+            List<RawTriple> ifpTriplesDb1 = new List<RawTriple>();
+
+            string connStr = GetConnStringFromURI(this.dbURIs, $"{dbInfoIndividual["prefix"]}{dbInfoIndividual["dbName"]}/{dbInfoIndividual["tableName"]}");
+            dbLoader = dbLoaderFactory.GetDBLoader(connStr); 
+
+            ifpTriplesDb1 = dbLoader.GetTriplesForSubject(tableName: dbInfoIndividual["tableName"],
+                individualColName: dbInfoIndividual["columnName"],
+                individualColValue: dbInfoIndividual["columnValue"],
+                prefixURI: dbInfoIndividual["prefix"]+dbInfoIndividual["dbName"]
+                );
+
+            if(ifpTriplesDb1.Count==0)
+            {
+                return null;
+            }
+
+            //find value for IFP column
+            string ifpColValue = string.Empty;  //email, for example
+            foreach(RawTriple t in ifpTriplesDb1)
+            {
+                if(ifpRanges.Contains(t.Pred))
+                {
+                    ifpColValue = t.Obj;
+                    ifpRanges.Remove(t.Pred);
+                }
+            }
+
+            //query DB2 for this email -> get individual #2
+            
+            Dictionary<string, string> dbInfoIfp2 = GetPrefixDbNameTableNameColNameFromURI(ifpRanges.First());
+            connStr = GetConnStringFromURI(this.dbURIs, $"{dbInfoIfp2["prefix"]}{dbInfoIfp2["dbName"]}/{dbInfoIfp2["tableName"]}");
+            dbLoader = dbLoaderFactory.GetDBLoader(connStr);
+
+            List<RawTriple> ifpTriplesDb2 = dbLoader.GetTriplesForSubject(tableName: dbInfoIfp2["tableName"],
+                individualColName: dbInfoIfp2["columnName"],
+                individualColValue: ifpColValue,
+                prefixURI: dbInfoIfp2["prefix"] + dbInfoIfp2["dbName"]);
+
+            if(ifpTriplesDb2.Count==0)
+            {
+                return null;
+            }
+
+            try {
+                string individualDb1PK = $"{dbInfoIndividual["dbName"]}.{ifpTriplesDb1[0].Pred.Split('#')[1]}.{ifpTriplesDb1[0].Obj}";
+                string individualDB2PK = $"{dbInfoIfp2["dbName"]}.{ifpTriplesDb2[0].Pred.Split('#')[1]}.{ifpTriplesDb2[0].Obj}";
+
+                List<string> individualPKs = new List<string>(new string[] { individualDb1PK, individualDB2PK });
+                individualPKs.Sort();
+
+                string federatedUri =
+                    $"{federatedTableUri}/{individualPKs[0]}.{individualPKs[1]}";
+
+                return federatedUri;
+
+            }catch(Exception ex)
+            {
+                return null;
             }
         }
 
@@ -959,6 +1049,8 @@ namespace SPARQLtoSQL
                 {
                     if (matchIFPDict[key].Count < 2)
                         continue;
+
+                    matchIFPDict[key].Sort();
 
                     Regex r = new Regex(@"((.+)/(.+)/(.+))/(.+)$");
 

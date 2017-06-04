@@ -417,7 +417,7 @@ namespace SPARQLtoSQL
                         FROM table(subject)
                         WHERE User.ID=1
                     */
-                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {individualColName} = {individualColValue}";
+                    cmd.CommandText = $"SELECT * FROM [{tableName}] WHERE {individualColName} = '{individualColValue}'";
                     conn.Open();
                     SqlDataReader reader = cmd.ExecuteReader();
                     string dbName = GetDBName();

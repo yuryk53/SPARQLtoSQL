@@ -164,7 +164,17 @@ namespace SPARQLtoSQL
                                 {
                                     //convert to federated shema syntax
                                     Dictionary<string, string> dbInfo = GetDatabaseInfoForIndividualURI(result[0].ToString());
-                                    string subjStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                    Dictionary<string, string> dbFederatedInfo = GetPrefixDbNameTableNameColNameFromURI(triple.Predicate.ToString());
+                                    //string subjStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                    string subjStr;
+                                    if(dbFederatedInfo["dbName"]!=dbInfo["dbName"])
+                                    {
+                                        subjStr = $"{dbFederatedInfo["prefix"]}{dbFederatedInfo["dbName"]}/{dbFederatedInfo["tableName"]}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                    }
+                                    else
+                                    {
+                                        subjStr = $"{dbFederatedInfo["prefix"]}{dbFederatedInfo["dbName"]}/{dbFederatedInfo["tableName"]}/{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                    }
                                     string predStr = triple.Predicate.ToString().Trim('<', '>');
                                     string objStr;
                                     if (triple.Object.VariableName == null) //not a pattern
@@ -1018,7 +1028,7 @@ namespace SPARQLtoSQL
                     }
                     else obj = g.CreateUriNode(new Uri(objStr));
                     //g.Assert(subj, t.Predicate, obj);
-                    g.Assert(subj, t.Predicate, obj);
+                    g.Assert(subj, federatedPredicateTriples[0].Subject, obj);
                     federatedSubjectsAdded.Add(subjStr);
 
                     triplesToAdd.Remove(t);

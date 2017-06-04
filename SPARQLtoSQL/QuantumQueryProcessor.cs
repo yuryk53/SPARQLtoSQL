@@ -186,7 +186,19 @@ namespace SPARQLtoSQL
                                         else
                                         {
                                             dbInfo = GetDatabaseInfoForIndividualURI(result[1].ToString());
-                                            objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                            string sourceSchemaURI = $"{dbInfo["prefix"]}{dbInfo["dbName"]}/{dbInfo["tableName"]}";
+                                            HashSet<string> superClass = GetSuperOntologyClassesURI(g, sourceSchemaURI); //super class=federated class
+                                            superClass.RemoveWhere(oclassUri => GetSuperOntologyClassesURI(g, oclassUri).Count > 0); //remove not supreme classes (possibly, not federated schema)
+                                            //objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                            if(superClass.Count>0)
+                                            {
+                                                objStr = $"{superClass.First()}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                            }
+                                            else
+                                            {
+                                                //possibly, logicaly incorrect
+                                                objStr = $"{federatedStem}/{dbInfo["dbName"]}.{dbInfo["columnName"]}.{dbInfo["columnValue"]}";
+                                            }
                                         }
                                     }
 

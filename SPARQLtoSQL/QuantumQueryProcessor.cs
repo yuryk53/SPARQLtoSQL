@@ -555,7 +555,9 @@ namespace SPARQLtoSQL
             }
 
             //query DB2 for this email -> get individual #2
-            
+            if (ifpRanges.Count == 0)
+                return null;
+
             Dictionary<string, string> dbInfoIfp2 = GetPrefixDbNameTableNameColNameFromURI(ifpRanges.First());
             connStr = GetConnStringFromURI(this.dbURIs, $"{dbInfoIfp2["prefix"]}{dbInfoIfp2["dbName"]}/{dbInfoIfp2["tableName"]}");
             dbLoader = dbLoaderFactory.GetDBLoader(connStr);

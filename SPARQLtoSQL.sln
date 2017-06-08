@@ -11,6 +11,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SPARQLtoSQL.Test", "SPARQLt
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MappingGenerator", "..\..\..\Code\MappingGenerator\MappingGenerator\MappingGenerator.csproj", "{87D6AB79-0A21-47C2-A127-C3E560CB03CD}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{51224876-7869-4B37-B8A3-1884227416B2}"
+	ProjectSection(SolutionItems) = preProject
+		COPYING = COPYING
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
